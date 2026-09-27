@@ -205,8 +205,7 @@ pub fn build_report(
                 head_sha: None,
             },
         );
-        let found = check::issues::likely_fixed(i, snapshot);
-        match found.or_else(|| code.get(&i.number).cloned()) {
+        match check::issues::likely_fixed(i, snapshot).or_else(|| code.get(&i.number).cloned()) {
             Some(f) => Item {
                 verdict: Verdict::LikelyFixed,
                 confidence: f.confidence,

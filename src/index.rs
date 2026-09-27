@@ -353,7 +353,7 @@ fn as_path(token: &str) -> Option<(String, Option<u32>)> {
     Some((path, line))
 }
 
-fn is_drive_path(path: &str) -> bool {
+pub(crate) fn is_drive_path(path: &str) -> bool {
     let b = path.as_bytes();
     b.len() > 2
         && b[0].is_ascii_alphabetic()

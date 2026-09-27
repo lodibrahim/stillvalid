@@ -213,10 +213,11 @@ impl Repo {
             .collect())
     }
 
-    /// Whether `path` is a file at `rev`.
+    /// Whether `path` is a file at `rev`. Reads trees only, so a blobless clone fetches nothing.
     pub fn is_file(&self, rev: &str, path: &str) -> bool {
-        self.git(&["cat-file", "-t", &format!("{rev}:{path}")], None)
-            .is_ok_and(|t| t == "blob")
+        // `<mode> <type> <sha>\t<path>`, or nothing.
+        self.git(&["ls-tree", "--full-tree", rev, "--", path], None)
+            .is_ok_and(|out| out.split(' ').nth(1) == Some("blob"))
     }
 
     /// The last first-parent commit in `from..head_sha` that removed `path`, and where it moved

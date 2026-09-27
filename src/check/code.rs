@@ -1,5 +1,6 @@
 //! Issue check against the local repo: the code an issue names is gone.
 
+use super::pulls::short_sha;
 use super::{issues, Finding};
 use crate::fetch::{Issue, Snapshot};
 use crate::index::{self, RefKind};
@@ -31,8 +32,8 @@ pub struct CodeChecks {
     pub failed: Vec<(u64, RepoError)>,
 }
 
-/// Run [`code_gone`] on every issue that [`issues::likely_fixed`] has no finding for; a PR or
-/// commit that says it fixes the issue is stronger evidence.
+/// Run [`code_gone`] on every issue that [`issues::likely_fixed`] has no finding for. Only saves
+/// git work: `store::build_report` decides that a PR or commit that says it fixes the issue wins.
 pub fn check_all(repo: &Repo, snapshot: &Snapshot) -> CodeChecks {
     let mut checks = CodeChecks::default();
     for issue in &snapshot.issues {
@@ -65,7 +66,7 @@ pub fn code_gone(issue: &Issue, repo: &Repo) -> Result<Option<Finding>, RepoErro
 
     let mut base_files = None;
     let mut seen_paths = HashSet::new();
-    let mut seen = HashSet::new();
+    let mut seen_needles = HashSet::new();
     let mut evidence = Vec::new();
     for r in refs {
         let gone = match r.kind {
@@ -86,14 +87,11 @@ pub fn code_gone(issue: &Issue, repo: &Repo) -> Result<Option<Finding>, RepoErro
                 }
             }
             RefKind::Symbol | RefKind::Error => {
-                let word = r.kind == RefKind::Symbol;
-                let needle = if word {
-                    symbol_needle(&r.text)
-                } else {
-                    r.text.as_str()
+                let (needle, min, word) = match r.kind {
+                    RefKind::Symbol => (symbol_needle(&r.text), MIN_SYMBOL_LEN, true),
+                    _ => (r.text.as_str(), MIN_ERROR_LEN, false),
                 };
-                let min = if word { MIN_SYMBOL_LEN } else { MIN_ERROR_LEN };
-                if needle.chars().count() < min || !seen.insert(needle.to_string()) {
+                if needle.chars().count() < min || !seen_needles.insert(needle.to_string()) {
                     continue;
                 }
                 string_gone(repo, &base, needle, word)?
@@ -143,21 +141,22 @@ fn resolve_path(
             return Ok(Some(p.to_string()));
         }
     }
-    let absolute = path.starts_with('/') || path.get(1..3) == Some(":/");
+    let absolute = path.starts_with('/') || index::is_drive_path(path);
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
     if !absolute || parts.len() < 2 {
         return Ok(None);
     }
-    if base_files.is_none() {
-        *base_files = Some(repo.files_at(base)?);
-    }
-    let files = base_files.as_deref().unwrap_or_default();
+    let files = match base_files {
+        Some(files) => files,
+        None => base_files.insert(repo.files_at(base)?),
+    };
     // Longest suffix first; a suffix matching several files is ambiguous.
     for start in 1..=parts.len() - 2 {
         let suffix = parts[start..].join("/");
+        let nested = format!("/{suffix}");
         let mut matches = files
             .iter()
-            .filter(|f| *f == &suffix || f.ends_with(&format!("/{suffix}")));
+            .filter(|f| *f == &suffix || f.ends_with(&nested));
         if let Some(f) = matches.next() {
             return Ok(matches.next().is_none().then(|| f.clone()));
         }
@@ -183,7 +182,7 @@ fn path_gone(repo: &Repo, base: &str, path: &str) -> Result<State, RepoError> {
                 note: format!(
                     "{}{percent}% of its lines changed since the issue was filed (at {})",
                     moved_note(path, &moves),
-                    short(base)
+                    short_sha(base)
                 ),
             }));
         }
@@ -201,7 +200,7 @@ fn path_gone(repo: &Repo, base: &str, path: &str) -> Result<State, RepoError> {
                 };
                 return Ok(State::Gone(Evidence {
                     kind: EvidenceType::Commit,
-                    reference: short(&commit),
+                    reference: short_sha(&commit).to_string(),
                     note,
                 }));
             }
@@ -232,7 +231,7 @@ fn string_gone(repo: &Repo, base: &str, needle: &str, word: bool) -> Result<Stat
     };
     Ok(State::Gone(Evidence {
         kind: EvidenceType::Commit,
-        reference: short(&commit),
+        reference: short_sha(&commit).to_string(),
         note: format!("Removed `{needle}` (named in the issue; was at {path}:{line} when filed)"),
     }))
 }
@@ -240,10 +239,6 @@ fn string_gone(repo: &Repo, base: &str, needle: &str, word: bool) -> Result<Stat
 /// The last `::` or `.` segment of a symbol: `grep_searcher::LineStep` → `LineStep`.
 fn symbol_needle(symbol: &str) -> &str {
     symbol.rsplit([':', '.']).next().unwrap_or(symbol)
-}
-
-fn short(sha: &str) -> String {
-    sha.chars().take(7).collect()
 }
 
 #[cfg(test)]
@@ -355,7 +350,7 @@ mod tests {
             f.evidence,
             [Evidence {
                 kind: EvidenceType::Commit,
-                reference: short(&del),
+                reference: short_sha(&del).into(),
                 note: "Deleted src/pool.rs (named in the issue)".into(),
             }]
         );
@@ -399,7 +394,7 @@ mod tests {
         let f = code_gone(&issue("See src/pool.rs:3"), &g.repo())
             .unwrap()
             .unwrap();
-        assert_eq!(f.evidence[0].reference, short(&del));
+        assert_eq!(f.evidence[0].reference, short_sha(&del));
         assert_eq!(
             f.evidence[0].note,
             "Renamed src/pool.rs -> crates/pool.rs, then deleted"
@@ -422,7 +417,7 @@ mod tests {
                 reference: "src/pool.rs".into(),
                 note: format!(
                     "75% of its lines changed since the issue was filed (at {})",
-                    short(&base)
+                    short_sha(&base)
                 ),
             }]
         );
@@ -487,7 +482,7 @@ mod tests {
                 "Deleted crates/a/src/lib.rs (named in the issue)"
             ]
         );
-        assert!(f.evidence.iter().all(|e| e.reference == short(&del)));
+        assert!(f.evidence.iter().all(|e| e.reference == short_sha(&del)));
     }
 
     #[test]
@@ -513,7 +508,7 @@ mod tests {
             f.evidence,
             [Evidence {
                 kind: EvidenceType::Commit,
-                reference: short(&removed),
+                reference: short_sha(&removed).into(),
                 note:
                     "Removed `release_slot` (named in the issue; was at src/pool.rs:2 when filed)"
                         .into(),
@@ -536,7 +531,7 @@ mod tests {
 
         let panic = "thread 'main' panicked at src/gone.rs:1:5:\npool closed while waiting";
         let f = code_gone(&issue(panic), &repo).unwrap().unwrap();
-        assert_eq!(f.evidence[0].reference, short(&removed));
+        assert_eq!(f.evidence[0].reference, short_sha(&removed));
         assert_eq!(
             f.evidence[0].note,
             "Removed `pool closed while waiting` (named in the issue; was at src/pool.rs:2 when filed)"
