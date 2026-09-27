@@ -1,0 +1,34 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      placeholder: stillvalid scan owner/repo --mode basic
+  - type: input
+    id: version
+    attributes:
+      label: stillvalid version
+      placeholder: output of `stillvalid --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [Linux, macOS, Windows, GitHub Action]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: Remove any tokens or API keys before pasting.
+      render: text

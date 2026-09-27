@@ -1,0 +1,58 @@
+# DRAFT — depends on release binaries that do not exist yet (see docs/ROADMAP.md, "Action").
+name: stillvalid
+description: Check whether open issues and PRs are still valid against the current code, with evidence.
+author: lodibrahim
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  mode:
+    description: basic | free-ai | pro-ai
+    default: free-ai
+  branch:
+    description: Branch where development happens (default = repo default branch)
+    default: ""
+  api-key:
+    description: LLM API key for pro-ai mode
+    default: ""
+  version:
+    description: stillvalid release to use
+    default: latest
+  publish-pages:
+    description: Publish report.json and the dashboard to the gh-pages branch
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install stillvalid
+      shell: bash
+      run: |
+        set -euo pipefail
+        # TODO: switch to the cargo-dist installer once releases exist
+        curl -sSfL "https://github.com/lodibrahim/stillvalid/releases/${{ inputs.version == 'latest' && 'latest/download' || format('download/{0}', inputs.version) }}/stillvalid-installer.sh" | sh
+
+    - name: Fetch previous report
+      shell: bash
+      run: |
+        git fetch origin gh-pages --depth 1 2>/dev/null && git show origin/gh-pages:stillvalid/report.json > previous.json || echo '{}' > previous.json
+
+    - name: Scan
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        STILLVALID_API_KEY: ${{ inputs.api-key }}
+      run: |
+        stillvalid scan "${{ github.repository }}" \
+          --mode "${{ inputs.mode }}" \
+          ${{ inputs.branch != '' && format('--branch {0}', inputs.branch) || '' }} \
+          --previous previous.json \
+          --out report.json \
+          --html index.html
+
+    - name: Publish to gh-pages
+      if: inputs.publish-pages == 'true'
+      shell: bash
+      run: |
+        echo "TODO: commit report.json + index.html to gh-pages under stillvalid/"

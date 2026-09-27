@@ -1,0 +1,24 @@
+# Copy to .github/workflows/stillvalid.yml in the repo you want to scan.
+name: stillvalid
+on:
+  schedule: [{ cron: "0 3 * * *" }]   # nightly
+  workflow_dispatch:
+
+permissions:
+  issues: write          # labels + pinned summary; use `read` for dashboard only
+  pull-requests: read
+  contents: write        # publish report to gh-pages
+  models: read           # free-ai mode (GitHub Models)
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: lodibrahim/stillvalid@v1
+        with:
+          mode: free-ai
+          branch: main
+          # api-key: ${{ secrets.LLM_API_KEY }}   # only for mode: pro-ai

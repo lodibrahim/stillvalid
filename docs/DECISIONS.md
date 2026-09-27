@@ -1,0 +1,23 @@
+# Decisions
+
+Newest first. Each entry: decision · why · alternatives considered.
+
+| Date | Decision | Why | Alternatives |
+|---|---|---|---|
+| 2026-09-27 | Supply-chain checks with **cargo-deny** (advisories, licenses, sources) in CI; GitHub Actions pinned to commit SHAs; CI token `contents: read`; Dependabot weekly | Enterprise-grade hygiene for an OSS tool that handles tokens; cargo-deny covers `cargo audit`'s RustSec checks too | cargo-audit only; tag-pinned actions |
+| 2026-09-27 | Ignore **RUSTSEC-2023-0071** (`rsa` timing side channel) in `deny.toml` | No fixed `rsa` exists; octocrab requires a JWT backend, and stillvalid never signs with an RSA key. Revisit when octocrab/jsonwebtoken drop `rsa` | `jwt-aws-lc-rs` backend (needs C toolchain, harder Windows builds); replace octocrab (design change) |
+| 2026-09-27 | Report fields: `tier: "none"` for unchecked items; `summary.pulls.cant_tell` added | Every item is `cant_tell` until checks exist, and "no evidence → `cant_tell`" applies to PRs too; both additive, so `schema_version` stays 1 | Label unchecked items `heuristic` (misleading); drop PR `cant_tell` count (summary wouldn't add up) |
+| 2026-09-27 | Fetcher lists issues/PRs via **REST** (`/issues`, `/pulls`) with `Link` pagination; GraphQL deferred to timeline cross-references | REST gives PR `head.sha` directly and is simplest to paginate and test; roadmap item split in two | GraphQL for everything now (more code before any verdict exists) |
+| 2026-09-27 | Minimal own serde structs + `octocrab::get`/`all_pages`, not octocrab's typed models | Typed models require dozens of fields, break on API drift, and make test fixtures huge | octocrab `issues().list()` / `pulls().list()` |
+| 2026-09-27 | Crate is **lib + bin** (`src/lib.rs` holds modules, `main.rs` is the CLI) | Matches "thiserror in library modules"; lets public contract types exist before every variant is used | Binary-only with `#[allow(dead_code)]` |
+| 2026-09-27 | Issue `body_hash` = sha256 of body only | Comments aren't fetched yet; will extend when they are (one-time re-check) | Include title |
+| 2026-09-27 | `rust-version` 1.80 kept; cargo's MSRV-aware resolver picks octocrab 0.49, sha2 0.10 | Don't change the declared MSRV without asking | Bump to 1.85 for octocrab 0.54 |
+| 2026-09-27 | License: **MIT OR Apache-2.0** | Rust ecosystem norm; maximizes adoption; Apache adds patent grant | MIT only, MPL-2.0, AGPL-3.0 (scares corporate adopters) |
+| 2026-09-27 | Name: **stillvalid** | Says exactly what it checks; free on crates.io, npm, GitHub org, Homebrew | Issue Lens (clashes with microsoft/IssueLens), isitfixed (GitHub user taken), backsift, issuesift, stillopen |
+| 2026-09-27 | Language: **Rust**, single native binaries via **cargo-dist** | Must install on macOS/Linux/Windows with no runtime; small binaries (~10 MB); mature release tooling | TypeScript/Node (needs Node), Bun/Deno compile (50–90 MB binaries) |
+| 2026-09-27 | Ship **CLI + GitHub Action** from one codebase | CLI for trying/dev/any CI; Action for nightly adoption; Action wraps the CLI | GitHub App (easiest install, but needs a server and the author pays compute/AI) |
+| 2026-09-27 | Results surface **inside GitHub** first (labels, pinned issue, Projects), Pages dashboard for depth | People see it where they already work | Separate website only |
+| 2026-09-27 | Three **modes**: `basic`, `free-ai` (default), `pro-ai` | No key or cost needed to start; BYO key for accuracy/scale | API-key-only |
+| 2026-09-27 | **No server**: state in `report.json` on `gh-pages` | Zero hosting; any repo adopts with one workflow file | SQLite + hosted service |
+| 2026-09-27 | **Read-only by default**, never auto-close | Trust; maintainers decide | Auto-close likely-fixed |
+| 2026-09-27 | **Verdict + evidence** as the core contract | Distinguishes from age-based stale bots and guessy AI triage | Scores without evidence |

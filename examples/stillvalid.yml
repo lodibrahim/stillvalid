@@ -1,0 +1,20 @@
+# Optional. Copy to .stillvalid.yml at the root of the scanned repo.
+mode: free-ai            # basic | free-ai | pro-ai
+branch: main             # branch where development happens
+skip_labels: [wontfix, discussion]
+
+outputs:
+  labels: true
+  pinned_summary: true
+  dashboard: true
+  comments: false
+  projects: false
+
+limits:
+  max_llm_calls_per_run: 200
+  max_cost_usd_per_run: 1.00   # pro-ai only
+
+provider:                # pro-ai only
+  kind: anthropic        # anthropic | openai | openai-compatible
+  model: claude-haiku-4-5
+  escalate_model: claude-sonnet-5
