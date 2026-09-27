@@ -155,7 +155,7 @@ pub fn body_hash(body: Option<&str>) -> String {
     format!("sha256:{hex}")
 }
 
-/// Build a report from fetched data. Issues get `likely_fixed` when [`check::likely_fixed`] finds
+/// Build a report from fetched data. Issues get `likely_fixed` when [`check::issues::likely_fixed`] finds
 /// evidence; every other item is `cant_tell`.
 pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Report {
     let unchecked = |kind, number, title: &str, url: &str, created_at, fingerprint| Item {
@@ -185,7 +185,7 @@ pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Repo
                 head_sha: None,
             },
         );
-        match check::likely_fixed(i, snapshot) {
+        match check::issues::likely_fixed(i, snapshot) {
             Some(f) => Item {
                 verdict: Verdict::LikelyFixed,
                 confidence: f.confidence,

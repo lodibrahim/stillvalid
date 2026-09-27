@@ -1,14 +1,8 @@
-//! Checks: heuristic verdicts over fetched data. Pure functions, no I/O.
+//! Issue checks.
 
+use super::Finding;
 use crate::fetch::{Issue, Reference, Snapshot};
 use crate::store::{Confidence, Evidence, EvidenceType};
-
-/// A `likely_fixed` verdict with the evidence behind it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Finding {
-    pub confidence: Confidence,
-    pub evidence: Vec<Evidence>,
-}
 
 /// An issue is likely fixed when a same-repo PR merged into the scanned branch after the issue
 /// was filed, or a commit referencing it is on the scanned branch, and the issue was not
