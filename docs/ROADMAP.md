@@ -39,10 +39,10 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [ ] Rate-limit aware, resumable across runs
 
 ### Outputs
-- [ ] Dashboard HTML (embedded template) — summary tiles, verdict breakdown bar, Issues/PRs tabs, verdict filters, table with evidence
+- [x] Dashboard HTML (embedded template) — summary tiles, verdict breakdown bar, Issues/PRs tabs, verdict filters, table with evidence
 - [ ] Labels (opt-in via `issues: write`)
 - [ ] Pinned "Backlog health" issue
-- [ ] Badge endpoint JSON
+- [x] Badge endpoint JSON
 
 ### Action
 - [ ] `action.yml` downloads release binary, runs scan, pushes to `gh-pages`

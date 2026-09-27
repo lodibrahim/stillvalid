@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --soft: #f6f8fa; --link: #0969da;
+  --likely_fixed: #1a7f37; --superseded: #8250df; --abandoned: #9a6700; --conflicts: #cf222e;
+  --ready_unreviewed: #0969da; --still_valid: #bc4c00; --needs_info: #bf3989; --duplicate: #1b7c83;
+  --still_applies: #4f46e5; --cant_tell: #818b98;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --soft: #151b23; --link: #4493f8;
+    --likely_fixed: #3fb950; --superseded: #a371f7; --abandoned: #d29922; --conflicts: #f85149;
+    --ready_unreviewed: #4493f8; --still_valid: #db6d28; --needs_info: #db61a2; --duplicate: #39c5cf;
+    --still_applies: #818cf8; --cant_tell: #656c76;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+header, main, footer { max-width: 72rem; margin: 0 auto; padding: 0 1rem; }
+header { padding-top: 1.5rem; }
+h1 { font-size: 1.5rem; margin: 0 0 .25rem; overflow-wrap: anywhere; }
+h2 { font-size: 1.15rem; margin: 1.5rem 0 .75rem; }
+a { color: var(--link); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+code { font: .875em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.meta, .muted, .sub, .num, .note, .shown, footer { color: var(--muted); }
+.meta { margin: 0; font-size: .9rem; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; margin: 1.25rem 0; }
+.tile { border: 1px solid var(--line); border-radius: 8px; padding: .75rem 1rem; background: var(--soft); color: var(--muted); }
+.tile .n { display: block; font-size: 1.75rem; font-weight: 600; color: var(--fg); }
+.tile[class*="v-"] { border-left: 4px solid var(--c); }
+
+.tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); margin-top: 1.5rem; }
+.tabs button {
+  font: inherit; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: .5rem .75rem; margin-bottom: -1px; cursor: pointer;
+}
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--link); font-weight: 600; }
+.tabs .n, .filters .n { font-variant-numeric: tabular-nums; color: var(--muted); }
+.tabs:not([hidden]) ~ .panel h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.tabs:not([hidden]) ~ .panel { padding-top: 1rem; }
+
+.bar { display: flex; height: .75rem; border-radius: 6px; overflow: hidden; gap: 2px; background: var(--line); }
+.bar span { background: var(--c); min-width: 3px; }
+.filters { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0 .25rem; }
+.filters button {
+  font: inherit; font-size: .875rem; color: var(--fg); background: var(--bg); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px; padding: .25rem .75rem; min-height: 2rem;
+}
+.filters button[aria-pressed="false"] { color: var(--muted); background: var(--soft); text-decoration: line-through; }
+.filters button[aria-pressed="false"] .dot { background: transparent; box-shadow: inset 0 0 0 2px var(--c); }
+.filters .reset { border-style: dashed; }
+.shown { font-size: .875rem; margin: .25rem 0 .5rem; }
+
+.dot { display: inline-block; width: .625rem; height: .625rem; border-radius: 50%; background: var(--c); margin-right: .375rem; }
+.v-likely_fixed { --c: var(--likely_fixed); } .v-superseded { --c: var(--superseded); }
+.v-abandoned { --c: var(--abandoned); } .v-conflicts { --c: var(--conflicts); }
+.v-ready_unreviewed { --c: var(--ready_unreviewed); } .v-still_valid { --c: var(--still_valid); }
+.v-needs_info { --c: var(--needs_info); } .v-duplicate { --c: var(--duplicate); }
+.v-still_applies { --c: var(--still_applies); } .v-cant_tell { --c: var(--cant_tell); }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: .8rem; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); padding: .5rem; }
+td { vertical-align: top; border-bottom: 1px solid var(--line); padding: .625rem .5rem; }
+td.item { width: 38%; overflow-wrap: anywhere; }
+td.item a { color: var(--fg); font-weight: 600; text-decoration: none; }
+td.item a:hover { color: var(--link); text-decoration: underline; }
+td:last-child { white-space: nowrap; color: var(--muted); }
+.verdict { display: block; white-space: nowrap; font-weight: 600; }
+.sub { display: block; font-size: .8rem; }
+.evidence { list-style: none; margin: 0; padding: 0; }
+.evidence li + li { margin-top: .375rem; }
+.etype {
+  display: inline-block; font-size: .7rem; text-transform: uppercase; letter-spacing: .03em;
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 .3rem; color: var(--muted);
+}
+.note { display: block; font-size: .875rem; overflow-wrap: anywhere; }
+.empty { color: var(--muted); }
+footer { font-size: .85rem; padding-top: 2rem; padding-bottom: 2rem; }
+
+@media (max-width: 40rem) {
+  thead { display: none; }
+  table, tbody, tr, td { display: block; width: auto; }
+  tr { border-bottom: 1px solid var(--line); padding: .75rem 0; }
+  td { border: 0; padding: .25rem 0; }
+  td.item { width: auto; }
+  td:last-child { white-space: normal; font-size: .85rem; }
+}
+</style>
+</head>
+<body>
+<header>
+{{header}}
+</header>
+<main>
+<section class="tiles" aria-label="Summary">
+{{tiles}}
+</section>
+<div class="tabs" role="tablist" aria-label="Item type" hidden>
+{{tabs}}
+</div>
+{{panels}}
+</main>
+<footer>
+Verdicts are suggestions backed by evidence, not decisions: check before closing anything.
+Generated by <a href="https://github.com/lodibrahim/stillvalid">stillvalid</a>.
+</footer>
+<script>
+(() => {
+  const tablist = document.querySelector(".tabs");
+  const tabs = [...tablist.querySelectorAll("[role=tab]")];
+  const select = (tab, focus) => {
+    for (const t of tabs) {
+      const on = t === tab;
+      t.setAttribute("aria-selected", on);
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    }
+    if (focus) tab.focus();
+  };
+  tablist.addEventListener("click", (e) => {
+    const tab = e.target.closest("[role=tab]");
+    if (!tab) return;
+    select(tab);
+    history.replaceState(null, "", "#" + tab.getAttribute("aria-controls"));
+  });
+  tablist.addEventListener("keydown", (e) => {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (!step) return;
+    const i = tabs.indexOf(document.activeElement);
+    select(tabs[(i + step + tabs.length) % tabs.length], true);
+  });
+  tablist.hidden = false;
+  select(tabs.find((t) => "#" + t.getAttribute("aria-controls") === location.hash) || tabs[0]);
+
+  for (const filters of document.querySelectorAll(".filters")) {
+    const panel = filters.closest(".panel");
+    const rows = [...panel.querySelectorAll("tbody tr")];
+    const shown = panel.querySelector(".shown");
+    const buttons = [...filters.querySelectorAll("[data-verdict]")];
+    const apply = () => {
+      const on = new Set(buttons.filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.dataset.verdict));
+      let n = 0;
+      for (const r of rows) {
+        r.hidden = !on.has(r.dataset.verdict);
+        if (!r.hidden) n++;
+      }
+      shown.textContent = n + " of " + rows.length + " shown";
+    };
+    filters.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      for (const x of b.dataset.verdict ? [b] : buttons) {
+        x.setAttribute("aria-pressed", b.dataset.verdict ? x.getAttribute("aria-pressed") !== "true" : true);
+      }
+      apply();
+    });
+  }
+})();
+</script>
+</body>
+</html>
