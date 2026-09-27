@@ -26,9 +26,9 @@ const WRITE_PAUSE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GithubError {
-    #[error("not allowed (needs a token with issues: write) or rate limited: {0}")]
+    #[error("not allowed (needs a token with issues: write) or rate limited: {}", describe(.0))]
     Forbidden(octocrab::Error),
-    #[error("GitHub API request failed: {0}")]
+    #[error("GitHub API request failed: {}", describe(.0))]
     Api(octocrab::Error),
 }
 
@@ -38,6 +38,16 @@ impl From<octocrab::Error> for GithubError {
             Some(403 | 429) => Self::Forbidden(e),
             _ => Self::Api(e),
         }
+    }
+}
+
+/// octocrab's own message for an API error is just "GitHub".
+fn describe(e: &octocrab::Error) -> String {
+    match e {
+        octocrab::Error::GitHub { source, .. } => {
+            format!("HTTP {}: {}", source.status_code.as_u16(), source.message)
+        }
+        e => e.to_string(),
     }
 }
 
@@ -814,6 +824,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, GithubError::Forbidden(_)), "{err}");
+        assert!(err.to_string().ends_with("HTTP 403: nope"), "{err}");
     }
 
     #[tokio::test]
