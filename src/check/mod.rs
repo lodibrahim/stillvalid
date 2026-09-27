@@ -1,8 +1,9 @@
-//! Checks: heuristic verdicts over fetched data. Pure functions, no I/O, except `merge`, which
-//! runs git in the local repo.
+//! Checks: heuristic verdicts over fetched data. Pure functions, no I/O, except `merge` and
+//! `code`, which run git in the local repo.
 
 use crate::store::{Confidence, Evidence};
 
+pub mod code;
 pub mod issues;
 pub mod merge;
 pub mod pulls;

@@ -167,14 +167,16 @@ pub fn body_hash(body: Option<&str>) -> String {
 }
 
 /// Build a report from fetched data. Issues get `likely_fixed` when [`check::issues::likely_fixed`] finds
-/// evidence; PRs get `merges` (from [`check::merge::check_all`]) and, with fetched activity, the
-/// activity rules; every other item is `cant_tell`.
+/// evidence, else `code` (from [`check::code::check_all`]); PRs get `merges` (from
+/// [`check::merge::check_all`]) and, with fetched activity, the activity rules; every other item
+/// is `cant_tell`.
 pub fn build_report(
     snapshot: &Snapshot,
     mode: &str,
     now: DateTime<Utc>,
     thresholds: &PullThresholds,
     merges: &BTreeMap<u64, pulls::Finding>,
+    code: &BTreeMap<u64, check::Finding>,
 ) -> Report {
     let unchecked = |kind, number, title: &str, url: &str, created_at, fingerprint| Item {
         kind,
@@ -203,7 +205,8 @@ pub fn build_report(
                 head_sha: None,
             },
         );
-        match check::issues::likely_fixed(i, snapshot) {
+        let found = check::issues::likely_fixed(i, snapshot);
+        match found.or_else(|| code.get(&i.number).cloned()) {
             Some(f) => Item {
                 verdict: Verdict::LikelyFixed,
                 confidence: f.confidence,
@@ -366,6 +369,7 @@ mod tests {
             ts("2026-09-27T03:12:00Z"),
             &PullThresholds::default(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )
     }
 
@@ -408,6 +412,7 @@ mod tests {
             ts("2026-09-27T03:12:00Z"),
             &PullThresholds::default(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         );
         let item = &r.items[0];
         assert_eq!(item.verdict, Verdict::LikelyFixed);
@@ -417,6 +422,43 @@ mod tests {
         assert_eq!(r.items[1].verdict, Verdict::CantTell);
         assert_eq!(r.summary.issues.likely_fixed, 1);
         assert_eq!(r.summary.issues.cant_tell, 1);
+    }
+
+    #[test]
+    fn code_finding_applies_only_without_a_reference_finding() {
+        let mut snap = snapshot();
+        snap.references.insert(
+            1204,
+            vec![crate::fetch::Reference::Pull(crate::fetch::PullRef {
+                number: 2977,
+                url: "https://github.com/acme/rocketdb/pull/2977".into(),
+                merged_at: Some(ts("2026-03-11T00:00:00Z")),
+                base_ref: "main".into(),
+                will_close: true,
+            })],
+        );
+        let gone = |reference: &str| check::Finding {
+            confidence: Confidence::Medium,
+            evidence: vec![Evidence {
+                kind: EvidenceType::Commit,
+                reference: reference.into(),
+                note: "Deleted src/pool.rs (named in the issue)".into(),
+            }],
+        };
+        let code = BTreeMap::from([(1204, gone("aaaaaaa")), (1300, gone("bbbbbbb"))]);
+        let r = build_report(
+            &snap,
+            "basic",
+            ts("2026-09-27T03:12:00Z"),
+            &PullThresholds::default(),
+            &BTreeMap::new(),
+            &code,
+        );
+        assert_eq!(r.items[0].confidence, Confidence::High);
+        assert_eq!(r.items[0].evidence[0].reference, "#2977");
+        assert_eq!(r.items[1].verdict, Verdict::LikelyFixed);
+        assert_eq!(r.items[1].confidence, Confidence::Medium);
+        assert_eq!(r.items[1].evidence[0].reference, "bbbbbbb");
     }
 
     #[test]
@@ -485,6 +527,7 @@ mod tests {
                 ts("2027-06-01T00:00:00Z"),
                 &PullThresholds::default(),
                 &merges,
+                &BTreeMap::new(),
             );
             r.items.into_iter().find(|i| i.kind == Kind::Pull).unwrap()
         };
