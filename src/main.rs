@@ -2,13 +2,15 @@
 //!
 //! Scanning fetches open issues and PRs and writes report.json. Issues that a merged PR or a
 //! commit on the branch says it fixes get `likely_fixed`; open PRs get the activity rules
-//! (`abandoned`, `ready_unreviewed`); everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
+//! (`abandoned`, `ready_unreviewed`) and a local `git merge-tree` against the branch
+//! (`conflicts`, `superseded`); everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;
+use stillvalid::check::merge;
 use stillvalid::check::pulls::PullThresholds;
 use stillvalid::{fetch, incremental, repo, store};
 
@@ -138,6 +140,24 @@ async fn main() -> Result<()> {
                 started.elapsed().as_secs_f64(),
             );
 
+            let started = Instant::now();
+            let checks =
+                merge::check_all(&local, &snapshot, token.as_deref()).unwrap_or_else(|e| {
+                    eprintln!("stillvalid: skipping merge checks: {e}");
+                    merge::MergeChecks::default()
+                });
+            eprintln!(
+                "stillvalid: merge-checked PRs against {} ({:.1}s)",
+                snapshot.branch,
+                started.elapsed().as_secs_f64(),
+            );
+            if let Some((number, err)) = checks.failed.first() {
+                eprintln!(
+                    "stillvalid: could not merge-check {} PRs (first: #{number}: {err})",
+                    checks.failed.len()
+                );
+            }
+
             let mode = mode.to_possible_value().expect("no skipped variants");
             let thresholds = PullThresholds {
                 abandoned_after_days,
@@ -148,6 +168,7 @@ async fn main() -> Result<()> {
                 mode.get_name(),
                 Utc::now().trunc_subsecs(0),
                 &thresholds,
+                &checks.findings,
             );
             let blobs = local
                 .blob_shas()
@@ -168,7 +189,7 @@ async fn main() -> Result<()> {
             }
             store::write_report(&report, &out)?;
             eprintln!(
-                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed; {} PRs abandoned, {} ready_unreviewed)",
+                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed; {} PRs abandoned, {} ready_unreviewed, {} conflicts, {} superseded)",
                 out.display(),
                 report.summary.issues.open,
                 report.summary.pulls.open,
@@ -177,6 +198,8 @@ async fn main() -> Result<()> {
                 report.summary.issues.likely_fixed,
                 report.summary.pulls.abandoned,
                 report.summary.pulls.ready_unreviewed,
+                report.summary.pulls.conflicts,
+                report.summary.pulls.superseded,
             );
             Ok(())
         }

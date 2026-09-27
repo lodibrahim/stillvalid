@@ -33,20 +33,36 @@ pub struct Finding {
     pub evidence: Vec<Evidence>,
 }
 
-/// Judge one open PR at time `now`. `None` means no rule matched (`cant_tell`).
-pub fn check(
+/// Judge one open PR at time `now` from its activity and its merge check
+/// ([`crate::check::merge`]): superseded > abandoned > conflicts > ready_unreviewed. A local
+/// conflict counts as "merge conflicts" even when GitHub's mergeable is unknown, and its file
+/// evidence follows an `abandoned` finding. `None` means no rule matched (`cant_tell`).
+pub fn verdict(
     pull: &Pull,
-    activity: &PullActivity,
+    activity: Option<&PullActivity>,
+    merge: Option<&Finding>,
     now: DateTime<Utc>,
     thresholds: &PullThresholds,
 ) -> Option<Finding> {
-    abandoned(pull, activity, now, thresholds)
-        .or_else(|| unreviewed(pull, activity, now, thresholds))
+    let conflicts = merge.filter(|f| f.verdict == Verdict::Conflicts);
+    if let Some(f) = merge.filter(|f| f.verdict == Verdict::Superseded) {
+        return Some(f.clone());
+    }
+    let activity = activity.map(|a| (a, conflicts.is_some()));
+    if let Some(mut f) = activity.and_then(|(a, c)| abandoned(pull, a, c, now, thresholds)) {
+        f.evidence
+            .extend(conflicts.into_iter().flat_map(|c| c.evidence.clone()));
+        return Some(f);
+    }
+    conflicts
+        .cloned()
+        .or_else(|| activity.and_then(|(a, c)| unreviewed(pull, a, c, now, thresholds)))
 }
 
 fn abandoned(
     pull: &Pull,
     activity: &PullActivity,
+    local_conflict: bool,
     now: DateTime<Utc>,
     thresholds: &PullThresholds,
 ) -> Option<Finding> {
@@ -62,7 +78,7 @@ fn abandoned(
     ) {
         reasons.push("checks failing");
     }
-    if activity.mergeable == Mergeable::Conflicting {
+    if local_conflict || activity.mergeable == Mergeable::Conflicting {
         reasons.push("merge conflicts");
     }
     if reasons.is_empty() {
@@ -79,18 +95,25 @@ fn abandoned(
         ago(idle),
         reasons.join(", ")
     );
-    Some(finding(Verdict::Abandoned, confidence, pull, note))
+    Some(finding(
+        Verdict::Abandoned,
+        confidence,
+        &pull.head.sha,
+        note,
+    ))
 }
 
 fn unreviewed(
     pull: &Pull,
     activity: &PullActivity,
+    local_conflict: bool,
     now: DateTime<Utc>,
     thresholds: &PullThresholds,
 ) -> Option<Finding> {
     let open_for = now - pull.created_at;
     let ready = !activity.draft
         && activity.checks == Some(CheckState::Success)
+        && !local_conflict
         && activity.mergeable != Mergeable::Conflicting
         && open_for >= Duration::days(thresholds.unreviewed_after_days.into());
     if !ready || reviewed(activity) {
@@ -104,22 +127,32 @@ fn unreviewed(
     Some(finding(
         Verdict::ReadyUnreviewed,
         Confidence::Medium,
-        pull,
+        &pull.head.sha,
         note,
     ))
 }
 
-fn finding(verdict: Verdict, confidence: Confidence, pull: &Pull, note: String) -> Finding {
-    let sha = &pull.head.sha;
+/// A finding with one commit as evidence.
+pub(crate) fn finding(
+    verdict: Verdict,
+    confidence: Confidence,
+    sha: &str,
+    note: String,
+) -> Finding {
     Finding {
         verdict,
         confidence,
         evidence: vec![Evidence {
             kind: EvidenceType::Commit,
-            reference: sha.get(..7).unwrap_or(sha).to_string(),
+            reference: short_sha(sha).to_string(),
             note,
         }],
     }
+}
+
+/// First 7 characters of a commit SHA.
+pub(crate) fn short_sha(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 /// Latest of: PR opened, head commit pushed, author's own comments and reviews.
@@ -169,7 +202,7 @@ fn ago(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::{Post, PullHead};
+    use crate::fetch::{Post, PullBase, PullHead};
 
     fn ts(s: &str) -> DateTime<Utc> {
         s.parse().unwrap()
@@ -189,6 +222,9 @@ mod tests {
             created_at: days_before_now(opened_days_ago),
             head: PullHead {
                 sha: "c0ffee1234567".into(),
+            },
+            base: PullBase {
+                name: "main".into(),
             },
         }
     }
@@ -216,7 +252,13 @@ mod tests {
     }
 
     fn run(pull: &Pull, activity: &PullActivity) -> Option<Finding> {
-        check(pull, activity, ts(NOW), &PullThresholds::default())
+        super::verdict(
+            pull,
+            Some(activity),
+            None,
+            ts(NOW),
+            &PullThresholds::default(),
+        )
     }
 
     fn verdict(pull: &Pull, activity: &PullActivity) -> Option<Verdict> {
@@ -410,10 +452,10 @@ mod tests {
         };
         let (p, a) = failing(30);
         assert_eq!(
-            check(&p, &a, ts(NOW), &t).map(|f| f.verdict),
+            super::verdict(&p, Some(&a), None, ts(NOW), &t).map(|f| f.verdict),
             Some(Verdict::Abandoned)
         );
-        let f = check(&pull(7), &activity(7), ts(NOW), &t).unwrap();
+        let f = super::verdict(&pull(7), Some(&activity(7)), None, ts(NOW), &t).unwrap();
         assert_eq!(f.verdict, Verdict::ReadyUnreviewed);
         assert!(f.evidence[0].note.ends_with("(1 week ago)"));
     }

@@ -139,6 +139,64 @@ impl Repo {
             })
             .collect())
     }
+
+    /// Run git in this repo and return trimmed stdout.
+    pub(crate) fn git(&self, args: &[&str], token: Option<&str>) -> Result<String, RepoError> {
+        git(Some(&self.path), args, token)
+    }
+
+    /// Fetch commits by SHA from `origin`: objects only, no refs or FETCH_HEAD. One request for
+    /// all SHAs; if that fails (a SHA gone after a force-push), one request per SHA, skipping
+    /// failures. Commits that are still missing make later git commands fail.
+    pub fn fetch_commits(&self, shas: &[&str], token: Option<&str>) {
+        if shas.is_empty() {
+            return;
+        }
+        let fetch = |shas: &[&str]| {
+            let mut args = vec!["fetch", "--quiet", "--no-write-fetch-head", "origin"];
+            args.extend(shas);
+            self.git(&args, token)
+        };
+        if fetch(shas).is_err() {
+            for &sha in shas {
+                let _ = fetch(&[sha]);
+            }
+        }
+    }
+
+    /// `git merge-tree --write-tree ours theirs`; writes the result tree to the object store only.
+    pub fn merge_tree(
+        &self,
+        ours: &str,
+        theirs: &str,
+        token: Option<&str>,
+    ) -> Result<MergeTree, RepoError> {
+        let args = [
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            "-z",
+            ours,
+            theirs,
+        ];
+        // Exit 1 means conflicts.
+        let stdout = git_output(Some(&self.path), &args, token, &[0, 1])?;
+        let mut fields = stdout.split('\0').filter(|f| !f.is_empty());
+        Ok(MergeTree {
+            tree: fields.next().unwrap_or_default().to_string(),
+            conflicts: fields.map(str::to_string).collect(),
+        })
+    }
+}
+
+/// Result of merging two commits without touching the index or working tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeTree {
+    /// Tree of the merge result (with conflict markers when there are conflicts).
+    pub tree: String,
+    /// Paths with conflicts; empty for a clean merge.
+    pub conflicts: Vec<String>,
 }
 
 /// Where the clone of `owner/name` is cached: `<OS cache dir>/stillvalid/repos/<owner>/<name>`.
@@ -188,17 +246,27 @@ fn parse_git_version(s: &str) -> Option<(u32, u32)> {
 
 /// Run git and return trimmed stdout.
 fn git(dir: Option<&Path>, args: &[&str], token: Option<&str>) -> Result<String, RepoError> {
+    Ok(git_output(dir, args, token, &[0])?.trim().to_string())
+}
+
+/// Run git and return raw stdout; exit codes outside `ok` are errors.
+fn git_output(
+    dir: Option<&Path>,
+    args: &[&str],
+    token: Option<&str>,
+    ok: &[i32],
+) -> Result<String, RepoError> {
     let out = git_command(dir, token)
         .args(args)
         .output()
         .map_err(RepoError::GitMissing)?;
-    if !out.status.success() {
+    if !out.status.code().is_some_and(|c| ok.contains(&c)) {
         return Err(RepoError::Git {
             args: args.join(" "),
             stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
         });
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// The token goes in through `GIT_CONFIG_*` env vars: not in argv, `.git/config`, or the URL.
