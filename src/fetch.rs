@@ -66,7 +66,8 @@ pub enum Reference {
     Commit {
         oid: String,
         url: String,
-        message: String,
+        /// The commit message closes the issue with a closing keyword (`fixes #N`).
+        will_close: bool,
         /// When the commit last referenced the issue.
         referenced_at: DateTime<Utc>,
     },
@@ -220,9 +221,50 @@ impl PullNode {
     }
 }
 
-/// Turn one issue's timeline into same-repo references, one per PR/commit,
+/// GitHub's closing keywords.
+const CLOSING_KEYWORDS: [&str; 9] = [
+    "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+];
+
+/// Whether a commit message closes issue `number` of `repo` with a closing keyword, as GitHub
+/// parses it: `Fixes #12`, `closes: owner/repo#12`, `Resolved https://github.com/owner/repo/issues/12`.
+/// Case-insensitive; the keyword must start a word and be followed by spaces or tabs.
+fn closes_issue(message: &str, repo: &str, number: u64) -> bool {
+    let text = message.to_ascii_lowercase();
+    let repo = repo.to_ascii_lowercase();
+    let prefixes = [
+        "#".to_string(),
+        format!("{repo}#"),
+        format!("https://github.com/{repo}/issues/"),
+    ];
+    CLOSING_KEYWORDS.iter().any(|kw| {
+        text.match_indices(kw).any(|(i, _)| {
+            let word_start = text[..i]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric());
+            let rest = &text[i + kw.len()..];
+            let rest = rest.strip_prefix(':').unwrap_or(rest);
+            let target = rest.trim_start_matches([' ', '\t']);
+            word_start
+                && rest.starts_with([' ', '\t'])
+                && prefixes.iter().any(|p| {
+                    target.strip_prefix(p.as_str()).is_some_and(|n| {
+                        let end = n.find(|c: char| !c.is_ascii_digit()).unwrap_or(n.len());
+                        n[..end].parse() == Ok(number)
+                    })
+                })
+        })
+    })
+}
+
+/// Turn issue `number`'s timeline into same-repo references, one per PR/commit,
 /// plus the latest time the issue was reopened.
-fn collect_references(events: Vec<TimelineItem>) -> (Vec<Reference>, Option<DateTime<Utc>>) {
+fn collect_references(
+    events: Vec<TimelineItem>,
+    repo: &str,
+    number: u64,
+) -> (Vec<Reference>, Option<DateTime<Utc>>) {
     let mut refs: Vec<Reference> = Vec::new();
     let mut reopened_at = None;
     let mut add = |new: Reference| {
@@ -234,14 +276,19 @@ fn collect_references(events: Vec<TimelineItem>) -> (Vec<Reference>, Option<Date
                 }
                 (
                     Reference::Commit {
-                        oid, referenced_at, ..
+                        oid,
+                        will_close,
+                        referenced_at,
+                        ..
                     },
                     Reference::Commit {
                         oid: new_oid,
+                        will_close: new_close,
                         referenced_at: new_at,
                         ..
                     },
                 ) if oid == new_oid => {
+                    *will_close |= *new_close;
                     *referenced_at = (*referenced_at).max(*new_at);
                     return;
                 }
@@ -277,7 +324,7 @@ fn collect_references(events: Vec<TimelineItem>) -> (Vec<Reference>, Option<Date
             } => add(Reference::Commit {
                 oid: c.oid,
                 url: c.url,
-                message: c.message,
+                will_close: closes_issue(&c.message, repo, number),
                 referenced_at: created_at,
             }),
             TimelineItem::ReopenedEvent { created_at } => {
@@ -371,8 +418,13 @@ impl Fetcher {
             .values()
             .flatten()
             .filter_map(|r| match r {
-                Reference::Commit { oid, .. } => Some(oid.as_str()),
-                Reference::Pull(_) => None,
+                // Only commits that claim to fix an issue can yield a verdict.
+                Reference::Commit {
+                    oid,
+                    will_close: true,
+                    ..
+                } => Some(oid.as_str()),
+                _ => None,
             })
             .collect();
         let mut commits_on_branch = BTreeSet::new();
@@ -420,6 +472,7 @@ impl Fetcher {
         owner: &str,
         name: &str,
     ) -> Result<(BTreeMap<u64, Vec<Reference>>, BTreeMap<u64, DateTime<Utc>>), FetchError> {
+        let repo = format!("{owner}/{name}");
         let mut out = BTreeMap::new();
         let mut reopened = BTreeMap::new();
         let mut cursor: Option<String> = None;
@@ -437,7 +490,8 @@ impl Fetcher {
             let data: RefsData = self.gh.graphql(&payload).await?;
             let issues = data.repository.issues;
             for issue in issues.nodes {
-                let (refs, reopened_at) = collect_references(issue.timeline_items.nodes);
+                let (refs, reopened_at) =
+                    collect_references(issue.timeline_items.nodes, &repo, issue.number);
                 if !refs.is_empty() {
                     out.insert(issue.number, refs);
                 }
@@ -493,6 +547,41 @@ mod tests {
             .build()
             .unwrap();
         Fetcher::new(gh)
+    }
+
+    #[test]
+    fn closing_keywords_match_like_github() {
+        let closes = |msg: &str| closes_issue(msg, "Owner/Repo", 12);
+        for yes in [
+            "Fixes #12",
+            "fix #12",
+            "FIXED #12.",
+            "closes: #12",
+            "Close #12, #13",
+            "Resolved\t#12",
+            "resolves owner/repo#12",
+            "Resolve https://github.com/OWNER/repo/issues/12",
+            "Refactor parser\n\nfixes #12",
+            // GitHub's parser accepts this too; not special-cased.
+            "This does not fix #12",
+        ] {
+            assert!(closes(yes), "{yes:?} should close #12");
+        }
+        for no in [
+            "See #12",
+            "hotfix #12",
+            "prefix #12",
+            "fixing #12",
+            "fixes #123",
+            "fixes #1",
+            "fixes #13, #12",
+            "fixes\n#12",
+            "fixes other/repo#12",
+            "fixes https://github.com/other/repo/issues/12",
+            "fixes#12",
+        ] {
+            assert!(!closes(no), "{no:?} should not close #12");
+        }
     }
 
     #[test]
@@ -652,7 +741,7 @@ mod tests {
         ]))
         .unwrap();
 
-        let (refs, reopened_at) = collect_references(events);
+        let (refs, reopened_at) = collect_references(events, "o/r", 1);
 
         assert_eq!(
             refs,
@@ -667,7 +756,7 @@ mod tests {
                 Reference::Commit {
                     oid: "abc".into(),
                     url: "https://github.com/o/r/commit/abc".into(),
-                    message: "Fix empty input\n\nFixes #1".into(),
+                    will_close: true,
                     referenced_at: "2026-04-02T00:00:00Z".parse().unwrap(),
                 },
             ]
@@ -770,7 +859,8 @@ mod tests {
     async fn parses_reopens_and_checks_referenced_commits_against_branch() {
         let server = empty_repo().await;
 
-        // Issue 1 references every commit; issue 2 references c1 again (compared once) and was reopened.
+        // Issue 1 references every commit; issue 2 references c1 again (compared once) and was
+        // reopened. Every message says "Fixes #1", so c7, referenced only by issue 2, is never compared.
         let all_commits = ["c1", "c2", "c3", "c4", "c5", "c6"].map(commit_ref);
         Mock::given(method("POST"))
             .and(path("/graphql"))
@@ -779,6 +869,7 @@ mod tests {
                     { "number": 1, "timelineItems": { "nodes": all_commits } },
                     { "number": 2, "timelineItems": { "nodes": [
                         commit_ref("c1"),
+                        commit_ref("c7"),
                         { "__typename": "ReopenedEvent", "createdAt": "2026-05-01T00:00:00Z" }
                     ] } }
                 ]),
@@ -794,6 +885,7 @@ mod tests {
             ("c4", 200, "ahead"),
             ("c5", 404, ""),
             ("c6", 422, ""),
+            ("c7", 200, "behind"),
         ];
         for (oid, code, status) in statuses {
             let body = if code == 200 {
@@ -805,7 +897,7 @@ mod tests {
                 .and(path(format!("/repos/o/r/compare/abc123...{oid}")))
                 .and(query_param("per_page", "1"))
                 .respond_with(ResponseTemplate::new(code).set_body_json(body))
-                .expect(1)
+                .expect(if oid == "c7" { 0 } else { 1 })
                 .mount(&server)
                 .await;
         }
@@ -818,6 +910,20 @@ mod tests {
 
         let on_branch: Vec<&str> = snap.commits_on_branch.iter().map(String::as_str).collect();
         assert_eq!(on_branch, ["c1", "c2"]);
+        assert!(matches!(
+            &snap.references[&1][0],
+            Reference::Commit {
+                will_close: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &snap.references[&2][0],
+            Reference::Commit {
+                will_close: false,
+                ..
+            }
+        ));
         let reopened: Vec<(u64, DateTime<Utc>)> =
             snap.reopened_at.iter().map(|(n, t)| (*n, *t)).collect();
         assert_eq!(reopened, [(2, "2026-05-01T00:00:00Z".parse().unwrap())]);
