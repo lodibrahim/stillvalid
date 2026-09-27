@@ -1,7 +1,7 @@
 //! stillvalid — is that issue still valid?
 //!
-//! Scanning fetches open issues and PRs and writes report.json; checks are not implemented yet,
-//! so every verdict is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
+//! Scanning fetches open issues and PRs and writes report.json. Issues that a merged PR or a
+//! commit on the branch says it fixes get `likely_fixed`; everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
@@ -119,11 +119,13 @@ async fn main() -> Result<()> {
                 store::build_report(&snapshot, mode.get_name(), Utc::now().trunc_subsecs(0));
             store::write_report(&report, &out)?;
             eprintln!(
-                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; all cant_tell until checks exist)",
+                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed)",
                 out.display(),
                 report.summary.issues.open,
                 report.summary.pulls.open,
                 snapshot.references.len(),
+                report.summary.issues.open - report.summary.issues.cant_tell,
+                report.summary.issues.likely_fixed,
             );
             Ok(())
         }

@@ -25,7 +25,7 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [ ] Incremental: skip items whose body hash and related-file SHAs are unchanged
 
 ### Tier 1 heuristics (`basic`)
-- [ ] Issue referenced by merged PR / commit on dev branch → `likely_fixed`
+- [x] Issue referenced by merged PR / commit on dev branch → `likely_fixed`
 - [ ] Referenced files/symbols deleted or rewritten → `likely_fixed` (medium)
 - [ ] Missing repro/version/code match → `needs_info`
 - [ ] PR: `git merge-tree` conflicts → `conflicts`

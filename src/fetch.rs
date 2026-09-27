@@ -6,7 +6,7 @@ use octocrab::{Octocrab, Page};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
@@ -53,13 +53,24 @@ pub struct Snapshot {
     /// Same-repo PRs and commits that reference each open issue, keyed by issue number.
     /// Empty when fetched without references.
     pub references: BTreeMap<u64, Vec<Reference>>,
+    /// Latest time each open issue was reopened, for issues that ever were.
+    pub reopened_at: BTreeMap<u64, DateTime<Utc>>,
+    /// Referenced commits that are on `branch`.
+    pub commits_on_branch: BTreeSet<String>,
 }
 
 /// Something in the same repository that mentions an issue.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reference {
     Pull(PullRef),
-    Commit { oid: String, url: String },
+    Commit {
+        oid: String,
+        url: String,
+        /// The commit message closes the issue with a closing keyword (`fixes #N`).
+        will_close: bool,
+        /// When the commit last referenced the issue.
+        referenced_at: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,7 +95,7 @@ query($owner: String!, $name: String!, $cursor: String, $issues: Int!, $events: 
       pageInfo { hasNextPage endCursor }
       nodes {
         number
-        timelineItems(first: $events, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT, REFERENCED_EVENT]) {
+        timelineItems(first: $events, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT, REFERENCED_EVENT, REOPENED_EVENT]) {
           nodes {
             __typename
             ... on CrossReferencedEvent {
@@ -99,8 +110,10 @@ query($owner: String!, $name: String!, $cursor: String, $issues: Int!, $events: 
             }
             ... on ReferencedEvent {
               isCrossRepository
-              commit { oid url }
+              createdAt
+              commit { oid url message }
             }
+            ... on ReopenedEvent { createdAt }
           }
         }
       }
@@ -163,8 +176,11 @@ enum TimelineItem {
     #[serde(rename_all = "camelCase")]
     ReferencedEvent {
         is_cross_repository: bool,
+        created_at: DateTime<Utc>,
         commit: Option<CommitNode>,
     },
+    #[serde(rename_all = "camelCase")]
+    ReopenedEvent { created_at: DateTime<Utc> },
     #[serde(other)]
     Other,
 }
@@ -190,6 +206,7 @@ struct PullNode {
 struct CommitNode {
     oid: String,
     url: String,
+    message: String,
 }
 
 impl PullNode {
@@ -204,21 +221,79 @@ impl PullNode {
     }
 }
 
-/// Turn one issue's timeline into same-repo references, one per PR/commit.
-fn collect_references(events: Vec<TimelineItem>) -> Vec<Reference> {
+/// GitHub's closing keywords.
+const CLOSING_KEYWORDS: [&str; 9] = [
+    "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+];
+
+/// Whether a commit message closes issue `number` of `repo` with a closing keyword, as GitHub
+/// parses it: `Fixes #12`, `closes: owner/repo#12`, `Resolved https://github.com/owner/repo/issues/12`.
+/// Case-insensitive; the keyword must start a word and be followed by spaces or tabs.
+fn closes_issue(message: &str, repo: &str, number: u64) -> bool {
+    let text = message.to_ascii_lowercase();
+    let repo = repo.to_ascii_lowercase();
+    let prefixes = [
+        "#".to_string(),
+        format!("{repo}#"),
+        format!("https://github.com/{repo}/issues/"),
+    ];
+    CLOSING_KEYWORDS.iter().any(|kw| {
+        text.match_indices(kw).any(|(i, _)| {
+            let word_start = text[..i]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric());
+            let rest = &text[i + kw.len()..];
+            let rest = rest.strip_prefix(':').unwrap_or(rest);
+            let target = rest.trim_start_matches([' ', '\t']);
+            word_start
+                && rest.starts_with([' ', '\t'])
+                && prefixes.iter().any(|p| {
+                    target.strip_prefix(p.as_str()).is_some_and(|n| {
+                        let end = n.find(|c: char| !c.is_ascii_digit()).unwrap_or(n.len());
+                        n[..end].parse() == Ok(number)
+                    })
+                })
+        })
+    })
+}
+
+/// Turn issue `number`'s timeline into same-repo references, one per PR/commit,
+/// plus the latest time the issue was reopened.
+fn collect_references(
+    events: Vec<TimelineItem>,
+    repo: &str,
+    number: u64,
+) -> (Vec<Reference>, Option<DateTime<Utc>>) {
     let mut refs: Vec<Reference> = Vec::new();
+    let mut reopened_at = None;
     let mut add = |new: Reference| {
-        if let Reference::Pull(new_pr) = &new {
-            for existing in refs.iter_mut() {
-                if let Reference::Pull(pr) = existing {
-                    if pr.number == new_pr.number {
-                        pr.will_close |= new_pr.will_close;
-                        return;
-                    }
+        for existing in refs.iter_mut() {
+            match (existing, &new) {
+                (Reference::Pull(pr), Reference::Pull(new_pr)) if pr.number == new_pr.number => {
+                    pr.will_close |= new_pr.will_close;
+                    return;
                 }
+                (
+                    Reference::Commit {
+                        oid,
+                        will_close,
+                        referenced_at,
+                        ..
+                    },
+                    Reference::Commit {
+                        oid: new_oid,
+                        will_close: new_close,
+                        referenced_at: new_at,
+                        ..
+                    },
+                ) if oid == new_oid => {
+                    *will_close |= *new_close;
+                    *referenced_at = (*referenced_at).max(*new_at);
+                    return;
+                }
+                _ => {}
             }
-        } else if refs.contains(&new) {
-            return;
         }
         refs.push(new);
     };
@@ -244,15 +319,26 @@ fn collect_references(events: Vec<TimelineItem>) -> Vec<Reference> {
             }
             TimelineItem::ReferencedEvent {
                 is_cross_repository: false,
+                created_at,
                 commit: Some(c),
             } => add(Reference::Commit {
                 oid: c.oid,
                 url: c.url,
+                will_close: closes_issue(&c.message, repo, number),
+                referenced_at: created_at,
             }),
+            TimelineItem::ReopenedEvent { created_at } => {
+                reopened_at = reopened_at.max(Some(created_at));
+            }
             _ => {}
         }
     }
-    refs
+    (refs, reopened_at)
+}
+
+#[derive(Deserialize)]
+struct Comparison {
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -322,11 +408,31 @@ impl Fetcher {
             .filter(|i| i.pull_request.is_none())
             .collect();
         let pulls = self.all_open::<Pull>(&format!("{base}/pulls")).await?;
-        let references = if with_references {
+        let (references, reopened_at) = if with_references {
             self.references(owner, name).await?
         } else {
-            BTreeMap::new()
+            Default::default()
         };
+
+        let oids: BTreeSet<&str> = references
+            .values()
+            .flatten()
+            .filter_map(|r| match r {
+                // Only commits that claim to fix an issue can yield a verdict.
+                Reference::Commit {
+                    oid,
+                    will_close: true,
+                    ..
+                } => Some(oid.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut commits_on_branch = BTreeSet::new();
+        for oid in oids {
+            if self.is_on_branch(&base, &head_sha, oid).await? {
+                commits_on_branch.insert(oid.to_string());
+            }
+        }
 
         Ok(Snapshot {
             repo: format!("{owner}/{name}"),
@@ -335,16 +441,40 @@ impl Fetcher {
             issues,
             pulls,
             references,
+            reopened_at,
+            commits_on_branch,
         })
     }
 
-    /// Page through open issues' timelines via GraphQL. Issues with no references are omitted.
+    /// Whether commit `oid` is contained in the scanned branch head: comparing head...oid is
+    /// `behind` or `identical`. 404/422 (unknown commit, or no common history) mean it is not.
+    async fn is_on_branch(&self, base: &str, head: &str, oid: &str) -> Result<bool, FetchError> {
+        let route = format!("{base}/compare/{head}...{oid}");
+        match self
+            .gh
+            .get::<Comparison, _, _>(route, Some(&[("per_page", "1")]))
+            .await
+        {
+            Ok(c) => Ok(c.status == "behind" || c.status == "identical"),
+            Err(octocrab::Error::GitHub { source, .. })
+                if matches!(source.status_code.as_u16(), 404 | 422) =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Page through open issues' timelines via GraphQL: references per issue (issues with none
+    /// are omitted) and latest reopen time per issue.
     async fn references(
         &self,
         owner: &str,
         name: &str,
-    ) -> Result<BTreeMap<u64, Vec<Reference>>, FetchError> {
+    ) -> Result<(BTreeMap<u64, Vec<Reference>>, BTreeMap<u64, DateTime<Utc>>), FetchError> {
+        let repo = format!("{owner}/{name}");
         let mut out = BTreeMap::new();
+        let mut reopened = BTreeMap::new();
         let mut cursor: Option<String> = None;
         loop {
             let payload = json!({
@@ -360,14 +490,18 @@ impl Fetcher {
             let data: RefsData = self.gh.graphql(&payload).await?;
             let issues = data.repository.issues;
             for issue in issues.nodes {
-                let refs = collect_references(issue.timeline_items.nodes);
+                let (refs, reopened_at) =
+                    collect_references(issue.timeline_items.nodes, &repo, issue.number);
                 if !refs.is_empty() {
                     out.insert(issue.number, refs);
+                }
+                if let Some(at) = reopened_at {
+                    reopened.insert(issue.number, at);
                 }
             }
             match issues.page_info.end_cursor {
                 Some(next) if issues.page_info.has_next_page => cursor = Some(next),
-                _ => return Ok(out),
+                _ => return Ok((out, reopened)),
             }
         }
     }
@@ -413,6 +547,41 @@ mod tests {
             .build()
             .unwrap();
         Fetcher::new(gh)
+    }
+
+    #[test]
+    fn closing_keywords_match_like_github() {
+        let closes = |msg: &str| closes_issue(msg, "Owner/Repo", 12);
+        for yes in [
+            "Fixes #12",
+            "fix #12",
+            "FIXED #12.",
+            "closes: #12",
+            "Close #12, #13",
+            "Resolved\t#12",
+            "resolves owner/repo#12",
+            "Resolve https://github.com/OWNER/repo/issues/12",
+            "Refactor parser\n\nfixes #12",
+            // GitHub's parser accepts this too; not special-cased.
+            "This does not fix #12",
+        ] {
+            assert!(closes(yes), "{yes:?} should close #12");
+        }
+        for no in [
+            "See #12",
+            "hotfix #12",
+            "prefix #12",
+            "fixing #12",
+            "fixes #123",
+            "fixes #1",
+            "fixes #13, #12",
+            "fixes\n#12",
+            "fixes other/repo#12",
+            "fixes https://github.com/other/repo/issues/12",
+            "fixes#12",
+        ] {
+            assert!(!closes(no), "{no:?} should not close #12");
+        }
     }
 
     #[test]
@@ -553,18 +722,26 @@ mod tests {
             // Mentioned by another issue: ignored.
             { "__typename": "CrossReferencedEvent", "isCrossRepository": false,
               "willCloseTarget": false, "source": { "__typename": "Issue" } },
-            // Commit mention, twice: one entry. Deleted commit (null): ignored.
+            // Commit mention, twice: one entry with the later time. Deleted commit (null): ignored.
             { "__typename": "ReferencedEvent", "isCrossRepository": false,
-              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc" } },
+              "createdAt": "2026-04-02T00:00:00Z",
+              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc",
+                          "message": "Fix empty input\n\nFixes #1" } },
             { "__typename": "ReferencedEvent", "isCrossRepository": false,
-              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc" } },
-            { "__typename": "ReferencedEvent", "isCrossRepository": false, "commit": null },
+              "createdAt": "2026-04-01T00:00:00Z",
+              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc",
+                          "message": "Fix empty input\n\nFixes #1" } },
+            { "__typename": "ReferencedEvent", "isCrossRepository": false,
+              "createdAt": "2026-04-03T00:00:00Z", "commit": null },
+            // Reopened twice: the latest counts.
+            { "__typename": "ReopenedEvent", "createdAt": "2026-05-02T00:00:00Z" },
+            { "__typename": "ReopenedEvent", "createdAt": "2026-05-01T00:00:00Z" },
             // Unrequested event type: ignored.
             { "__typename": "LabeledEvent" }
         ]))
         .unwrap();
 
-        let refs = collect_references(events);
+        let (refs, reopened_at) = collect_references(events, "o/r", 1);
 
         assert_eq!(
             refs,
@@ -579,9 +756,12 @@ mod tests {
                 Reference::Commit {
                     oid: "abc".into(),
                     url: "https://github.com/o/r/commit/abc".into(),
+                    will_close: true,
+                    referenced_at: "2026-04-02T00:00:00Z".parse().unwrap(),
                 },
             ]
         );
+        assert_eq!(reopened_at, Some("2026-05-02T00:00:00Z".parse().unwrap()));
     }
 
     #[tokio::test]
@@ -646,6 +826,136 @@ mod tests {
         assert!(
             matches!(&snap.references[&3][0], Reference::Pull(p) if p.number == 11 && !p.will_close)
         );
+    }
+
+    /// Server with branch `main` and no open issues or PRs.
+    async fn empty_repo() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/branches/main"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "commit": { "sha": "abc123" } })),
+            )
+            .mount(&server)
+            .await;
+        for route in ["/repos/o/r/issues", "/repos/o/r/pulls"] {
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+        }
+        server
+    }
+
+    fn commit_ref(oid: &str) -> serde_json::Value {
+        json!({ "__typename": "ReferencedEvent", "isCrossRepository": false,
+                "createdAt": "2026-04-01T00:00:00Z",
+                "commit": { "oid": oid, "url": format!("https://github.com/o/r/commit/{oid}"),
+                           "message": format!("Fixes #1 via {oid}") } })
+    }
+
+    #[tokio::test]
+    async fn parses_reopens_and_checks_referenced_commits_against_branch() {
+        let server = empty_repo().await;
+
+        // Issue 1 references every commit; issue 2 references c1 again (compared once) and was
+        // reopened. Every message says "Fixes #1", so c7, referenced only by issue 2, is never compared.
+        let all_commits = ["c1", "c2", "c3", "c4", "c5", "c6"].map(commit_ref);
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(refs_page(
+                json!([
+                    { "number": 1, "timelineItems": { "nodes": all_commits } },
+                    { "number": 2, "timelineItems": { "nodes": [
+                        commit_ref("c1"),
+                        commit_ref("c7"),
+                        { "__typename": "ReopenedEvent", "createdAt": "2026-05-01T00:00:00Z" }
+                    ] } }
+                ]),
+                None,
+            )))
+            .mount(&server)
+            .await;
+
+        let statuses = [
+            ("c1", 200, "behind"),
+            ("c2", 200, "identical"),
+            ("c3", 200, "diverged"),
+            ("c4", 200, "ahead"),
+            ("c5", 404, ""),
+            ("c6", 422, ""),
+            ("c7", 200, "behind"),
+        ];
+        for (oid, code, status) in statuses {
+            let body = if code == 200 {
+                json!({ "status": status })
+            } else {
+                json!({ "message": "No common ancestor" })
+            };
+            Mock::given(method("GET"))
+                .and(path(format!("/repos/o/r/compare/abc123...{oid}")))
+                .and(query_param("per_page", "1"))
+                .respond_with(ResponseTemplate::new(code).set_body_json(body))
+                .expect(if oid == "c7" { 0 } else { 1 })
+                .mount(&server)
+                .await;
+        }
+
+        let snap = fetcher(&server)
+            .await
+            .fetch("o/r", Some("main"), true)
+            .await
+            .unwrap();
+
+        let on_branch: Vec<&str> = snap.commits_on_branch.iter().map(String::as_str).collect();
+        assert_eq!(on_branch, ["c1", "c2"]);
+        assert!(matches!(
+            &snap.references[&1][0],
+            Reference::Commit {
+                will_close: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &snap.references[&2][0],
+            Reference::Commit {
+                will_close: false,
+                ..
+            }
+        ));
+        let reopened: Vec<(u64, DateTime<Utc>)> =
+            snap.reopened_at.iter().map(|(n, t)| (*n, *t)).collect();
+        assert_eq!(reopened, [(2, "2026-05-01T00:00:00Z".parse().unwrap())]);
+    }
+
+    #[tokio::test]
+    async fn compare_server_error_is_reported() {
+        let server = empty_repo().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(refs_page(
+                json!([{ "number": 1, "timelineItems": { "nodes": [
+                    commit_ref("c1")
+                ] } }]),
+                None,
+            )))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/compare/abc123...c1"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(json!({ "message": "rate limited" })),
+            )
+            .mount(&server)
+            .await;
+
+        let err = fetcher(&server)
+            .await
+            .fetch("o/r", Some("main"), true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FetchError::Api(_)));
     }
 
     #[tokio::test]
