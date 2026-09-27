@@ -115,6 +115,7 @@ mod tests {
             references: [(7, refs)].into(),
             reopened_at: Default::default(),
             commits_on_branch: Default::default(),
+            pull_activity: Default::default(),
         }
     }
 

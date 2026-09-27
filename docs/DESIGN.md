@@ -143,6 +143,9 @@ outputs:
 limits:
   max_llm_calls_per_run: 200
   max_cost_usd_per_run: 1.00   # pro-ai only
+pulls:                   # also: scan --abandoned-after-days / --unreviewed-after-days
+  abandoned_after_days: 180    # no author activity + failing checks or conflicts
+  unreviewed_after_days: 21    # green, not draft, open this long with no review
 provider:                # pro-ai only
   kind: anthropic        # anthropic | openai | openai-compatible
   model: claude-haiku-4-5

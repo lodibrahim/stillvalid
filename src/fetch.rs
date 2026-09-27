@@ -1,5 +1,6 @@
 //! Fetcher: pulls open issues and pull requests for a repository from the GitHub REST API,
-//! and the PRs/commits that reference each issue from the GraphQL timeline.
+//! the PRs/commits that reference each issue from the GraphQL timeline, and each open PR's
+//! activity (draft, checks, reviews, comments) from GraphQL.
 
 use chrono::{DateTime, Utc};
 use octocrab::{Octocrab, Page};
@@ -57,6 +58,9 @@ pub struct Snapshot {
     pub reopened_at: BTreeMap<u64, DateTime<Utc>>,
     /// Referenced commits that are on `branch`.
     pub commits_on_branch: BTreeSet<String>,
+    /// Draft flag, checks, reviews, and comments for each open PR, keyed by PR number.
+    /// Empty when fetched without GraphQL.
+    pub pull_activity: BTreeMap<u64, PullActivity>,
 }
 
 /// Something in the same repository that mentions an issue.
@@ -341,6 +345,179 @@ struct Comparison {
     status: String,
 }
 
+/// What the PR activity rules need about one open PR.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PullActivity {
+    pub draft: bool,
+    /// PR author's login; `None` for deleted accounts.
+    pub author: Option<String>,
+    pub mergeable: Mergeable,
+    /// Committer date of the head commit (set by new commits and rebases, not by pushing).
+    pub head_committed_at: Option<DateTime<Utc>>,
+    /// Combined status of the head commit's checks; `None` when it has none.
+    pub checks: Option<CheckState>,
+    /// Submitted reviews (last `POSTS_PER_PULL`), including the author's replies.
+    pub reviews: Vec<Post>,
+    /// Conversation comments (last `POSTS_PER_PULL`).
+    pub comments: Vec<Post>,
+}
+
+/// A review or comment on a PR.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Post {
+    pub author: Option<String>,
+    pub association: Association,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Mergeable {
+    Mergeable,
+    Conflicting,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CheckState {
+    Success,
+    Failure,
+    Error,
+    Pending,
+    Expected,
+}
+
+/// The poster's relationship to the repository. Owners, members, and collaborators have write
+/// access; everything else is `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Association {
+    Owner,
+    Member,
+    Collaborator,
+    #[serde(other)]
+    Other,
+}
+
+/// PRs per GraphQL page, and reviews/comments per PR (posts past the cap are not fetched).
+const PULLS_PER_PAGE: u32 = 50;
+const POSTS_PER_PULL: u32 = 20;
+
+const PULL_ACTIVITY_QUERY: &str = r#"
+query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: $pulls, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        isDraft
+        author { login }
+        mergeable
+        commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
+        reviews(last: $posts) { nodes { author { login } authorAssociation submittedAt } }
+        comments(last: $posts) { nodes { author { login } authorAssociation createdAt } }
+      }
+    }
+  }
+}
+"#;
+
+#[derive(Deserialize)]
+struct PullsData {
+    repository: PullsRepo,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PullsRepo {
+    pull_requests: PullsPage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PullsPage {
+    page_info: PageInfo,
+    nodes: Vec<PullActivityNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PullActivityNode {
+    number: u64,
+    is_draft: bool,
+    author: Option<Login>,
+    mergeable: Mergeable,
+    commits: Nodes<CommitWrapper>,
+    reviews: Nodes<PostNode>,
+    comments: Nodes<PostNode>,
+}
+
+#[derive(Deserialize)]
+struct Nodes<T> {
+    nodes: Vec<T>,
+}
+
+#[derive(Deserialize)]
+struct Login {
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct CommitWrapper {
+    commit: HeadCommit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeadCommit {
+    committed_date: DateTime<Utc>,
+    status_check_rollup: Option<Rollup>,
+}
+
+#[derive(Deserialize)]
+struct Rollup {
+    state: CheckState,
+}
+
+/// A review (`submittedAt`, null while pending) or a comment (`createdAt`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PostNode {
+    author: Option<Login>,
+    author_association: Association,
+    #[serde(alias = "createdAt")]
+    submitted_at: Option<DateTime<Utc>>,
+}
+
+fn into_posts(nodes: Vec<PostNode>) -> Vec<Post> {
+    nodes
+        .into_iter()
+        .filter_map(|n| {
+            Some(Post {
+                author: n.author.map(|a| a.login),
+                association: n.author_association,
+                at: n.submitted_at?,
+            })
+        })
+        .collect()
+}
+
+impl PullActivityNode {
+    fn into_activity(self) -> PullActivity {
+        let head = self.commits.nodes.into_iter().next().map(|c| c.commit);
+        PullActivity {
+            draft: self.is_draft,
+            author: self.author.map(|a| a.login),
+            mergeable: self.mergeable,
+            head_committed_at: head.as_ref().map(|h| h.committed_date),
+            checks: head.and_then(|h| h.status_check_rollup).map(|r| r.state),
+            reviews: into_posts(self.reviews.nodes),
+            comments: into_posts(self.comments.nodes),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct RepoInfo {
     default_branch: String,
@@ -375,7 +552,8 @@ impl Fetcher {
     }
 
     /// Fetch all open issues and PRs, plus the head commit of `branch` (or the default branch).
-    /// `with_references` also fetches issue timelines; GitHub's GraphQL API requires a token.
+    /// `with_references` also fetches issue timelines and PR activity; GitHub's GraphQL API
+    /// requires a token.
     pub async fn fetch(
         &self,
         repo: &str,
@@ -408,8 +586,11 @@ impl Fetcher {
             .filter(|i| i.pull_request.is_none())
             .collect();
         let pulls = self.all_open::<Pull>(&format!("{base}/pulls")).await?;
-        let (references, reopened_at) = if with_references {
-            self.references(owner, name).await?
+        let ((references, reopened_at), pull_activity) = if with_references {
+            tokio::try_join!(
+                self.references(owner, name),
+                self.pull_activity(owner, name)
+            )?
         } else {
             Default::default()
         };
@@ -443,6 +624,7 @@ impl Fetcher {
             references,
             reopened_at,
             commits_on_branch,
+            pull_activity,
         })
     }
 
@@ -502,6 +684,37 @@ impl Fetcher {
             match issues.page_info.end_cursor {
                 Some(next) if issues.page_info.has_next_page => cursor = Some(next),
                 _ => return Ok((out, reopened)),
+            }
+        }
+    }
+
+    /// Page through open PRs' activity via GraphQL.
+    async fn pull_activity(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<BTreeMap<u64, PullActivity>, FetchError> {
+        let mut out = BTreeMap::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let payload = json!({
+                "query": PULL_ACTIVITY_QUERY,
+                "variables": {
+                    "owner": owner,
+                    "name": name,
+                    "cursor": cursor,
+                    "pulls": PULLS_PER_PAGE,
+                    "posts": POSTS_PER_PULL,
+                },
+            });
+            let data: PullsData = self.gh.graphql(&payload).await?;
+            let pulls = data.repository.pull_requests;
+            for pull in pulls.nodes {
+                out.insert(pull.number, pull.into_activity());
+            }
+            match pulls.page_info.end_cursor {
+                Some(next) if pulls.page_info.has_next_page => cursor = Some(next),
+                _ => return Ok(out),
             }
         }
     }
@@ -812,6 +1025,8 @@ mod tests {
             .mount(&server)
             .await;
 
+        mount_pulls_page(&server, None, json!([]), None).await;
+
         let snap = fetcher(&server)
             .await
             .fetch("o/r", Some("main"), true)
@@ -902,6 +1117,8 @@ mod tests {
                 .await;
         }
 
+        mount_pulls_page(&server, None, json!([]), None).await;
+
         let snap = fetcher(&server)
             .await
             .fetch("o/r", Some("main"), true)
@@ -950,12 +1167,133 @@ mod tests {
             .mount(&server)
             .await;
 
+        mount_pulls_page(&server, None, json!([]), None).await;
+
         let err = fetcher(&server)
             .await
             .fetch("o/r", Some("main"), true)
             .await
             .unwrap_err();
         assert!(matches!(err, FetchError::Api(_)));
+    }
+
+    /// Answer the PR activity query for `cursor` (matched on the `pulls` variable, so it takes
+    /// precedence over timeline mocks).
+    async fn mount_pulls_page(
+        server: &MockServer,
+        cursor: Option<&str>,
+        nodes: serde_json::Value,
+        next: Option<&str>,
+    ) {
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_partial_json(
+                json!({ "variables": { "cursor": cursor, "pulls": PULLS_PER_PAGE } }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "repository": { "pullRequests": {
+                    "pageInfo": { "hasNextPage": next.is_some(), "endCursor": next },
+                    "nodes": nodes
+                }}}
+            })))
+            .with_priority(1)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn fetches_pull_activity_across_graphql_pages() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/branches/main"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "commit": { "sha": "abc123" } })),
+            )
+            .mount(&server)
+            .await;
+        for route in ["/repos/o/r/issues", "/repos/o/r/pulls"] {
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(refs_page(json!([]), None)))
+            .mount(&server)
+            .await;
+
+        mount_pulls_page(
+            &server,
+            None,
+            json!([{
+                "number": 4, "isDraft": false, "author": { "login": "alice" },
+                "mergeable": "CONFLICTING",
+                "commits": { "nodes": [{ "commit": {
+                    "committedDate": "2026-01-02T00:00:00Z",
+                    "statusCheckRollup": { "state": "FAILURE" } } }] },
+                "reviews": { "nodes": [
+                    { "author": { "login": "bob" }, "authorAssociation": "MEMBER",
+                      "submittedAt": "2026-01-03T00:00:00Z" },
+                    // Pending review: no submittedAt, dropped.
+                    { "author": { "login": "bob" }, "authorAssociation": "MEMBER",
+                      "submittedAt": null }
+                ] },
+                "comments": { "nodes": [
+                    { "author": null, "authorAssociation": "FIRST_TIME_CONTRIBUTOR",
+                      "createdAt": "2026-01-04T00:00:00Z" }
+                ] }
+            }]),
+            Some("p1"),
+        )
+        .await;
+        mount_pulls_page(
+            &server,
+            Some("p1"),
+            json!([{
+                "number": 5, "isDraft": true, "author": null, "mergeable": "UNKNOWN",
+                "commits": { "nodes": [{ "commit": {
+                    "committedDate": "2026-02-01T00:00:00Z", "statusCheckRollup": null } }] },
+                "reviews": { "nodes": [] },
+                "comments": { "nodes": [] }
+            }]),
+            None,
+        )
+        .await;
+
+        let snap = fetcher(&server)
+            .await
+            .fetch("o/r", Some("main"), true)
+            .await
+            .unwrap();
+
+        let keys: Vec<u64> = snap.pull_activity.keys().copied().collect();
+        assert_eq!(keys, [4, 5]);
+        assert_eq!(
+            snap.pull_activity[&4],
+            PullActivity {
+                draft: false,
+                author: Some("alice".into()),
+                mergeable: Mergeable::Conflicting,
+                head_committed_at: Some("2026-01-02T00:00:00Z".parse().unwrap()),
+                checks: Some(CheckState::Failure),
+                reviews: vec![Post {
+                    author: Some("bob".into()),
+                    association: Association::Member,
+                    at: "2026-01-03T00:00:00Z".parse().unwrap(),
+                }],
+                comments: vec![Post {
+                    author: None,
+                    association: Association::Other,
+                    at: "2026-01-04T00:00:00Z".parse().unwrap(),
+                }],
+            }
+        );
+        let draft = &snap.pull_activity[&5];
+        assert!(draft.draft && draft.author.is_none());
+        assert_eq!(draft.mergeable, Mergeable::Unknown);
+        assert_eq!(draft.checks, None);
     }
 
     #[tokio::test]
