@@ -3,7 +3,7 @@
 use super::pulls::short_sha;
 use super::{issues, Finding};
 use crate::fetch::{Issue, Snapshot};
-use crate::index::{self, RefKind};
+use crate::index::{self, RefKind, Reference};
 use crate::repo::{Repo, RepoError};
 use crate::store::{Confidence, Evidence, EvidenceType};
 use std::collections::{BTreeMap, HashSet};
@@ -30,6 +30,8 @@ pub struct CodeChecks {
     pub findings: BTreeMap<u64, Finding>,
     /// Issues that could not be checked.
     pub failed: Vec<(u64, RepoError)>,
+    /// Why the batched blob fetch failed; git then fetches blobs one by one.
+    pub prefetch_failed: Option<RepoError>,
 }
 
 /// Run [`code_gone`] on every issue that [`issues::likely_fixed`] has no finding for. Only saves
@@ -37,10 +39,32 @@ pub struct CodeChecks {
 pub fn check_all(repo: &Repo, snapshot: &Snapshot, token: Option<&str>) -> CodeChecks {
     let token = repo.fetch_token(token);
     let mut checks = CodeChecks::default();
-    for issue in &snapshot.issues {
-        if issues::likely_fixed(issue, snapshot).is_some() {
-            continue;
-        }
+    let issues: Vec<&Issue> = snapshot
+        .issues
+        .iter()
+        .filter(|i| issues::likely_fixed(i, snapshot).is_none())
+        .collect();
+    // One batched fetch for every issue: from the oldest one's base to the scanned commit.
+    let mut dates: Vec<_> = issues
+        .iter()
+        .filter(|i| {
+            index::extract(&i.title, i.body.as_deref().unwrap_or(""))
+                .iter()
+                .any(is_checked)
+        })
+        .map(|i| i.created_at)
+        .collect();
+    dates.sort();
+    if let Some(base) = dates
+        .into_iter()
+        .find_map(|at| repo.commit_before(at).ok().flatten())
+    {
+        let fetched = repo
+            .history_blobs(&base)
+            .and_then(|blobs| repo.fetch_blobs(&blobs, token));
+        checks.prefetch_failed = fetched.err();
+    }
+    for issue in issues {
         match code_gone(issue, repo, token) {
             Ok(Some(f)) => {
                 checks.findings.insert(issue.number, f);
@@ -74,10 +98,10 @@ pub fn code_gone(
     let mut seen_paths = HashSet::new();
     let mut seen_needles = HashSet::new();
     let mut evidence = Vec::new();
-    for r in refs {
+    for r in refs.into_iter().filter(is_checked) {
         let gone = match r.kind {
             RefKind::Path => {
-                let Some(path) = r.path.as_deref().filter(|p| is_code_file(p)) else {
+                let Some(path) = r.path.as_deref() else {
                     continue;
                 };
                 let Some(path) = resolve_path(repo, &base, path, &mut base_files)? else {
@@ -93,16 +117,15 @@ pub fn code_gone(
                 }
             }
             RefKind::Symbol | RefKind::Error => {
-                let (needle, min, word) = match r.kind {
-                    RefKind::Symbol => (symbol_needle(&r.text), MIN_SYMBOL_LEN, true),
-                    _ => (r.text.as_str(), MIN_ERROR_LEN, false),
+                let (needle, word) = match r.kind {
+                    RefKind::Symbol => (symbol_needle(&r.text), true),
+                    _ => (r.text.as_str(), false),
                 };
-                if needle.chars().count() < min || !seen_needles.insert(needle.to_string()) {
+                if !seen_needles.insert(needle.to_string()) {
                     continue;
                 }
                 string_gone(repo, &base, needle, word, token)?
             }
-            // Frames also emit their symbol and path, which are checked on their own.
             RefKind::Frame => continue,
         };
         match gone {
@@ -125,6 +148,17 @@ enum State {
     Present,
     /// Deleted or rewritten since.
     Gone(Evidence),
+}
+
+/// Whether [`code_gone`] checks `r` at all: a code file, or a long enough symbol or error string.
+/// Frames also emit their symbol and path, which are checked on their own.
+fn is_checked(r: &Reference) -> bool {
+    match r.kind {
+        RefKind::Path => r.path.as_deref().is_some_and(is_code_file),
+        RefKind::Symbol => symbol_needle(&r.text).chars().count() >= MIN_SYMBOL_LEN,
+        RefKind::Error => r.text.chars().count() >= MIN_ERROR_LEN,
+        RefKind::Frame => false,
+    }
 }
 
 fn is_code_file(path: &str) -> bool {

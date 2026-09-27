@@ -5,7 +5,7 @@ use crate::check::pulls::{finding, short_sha, Finding};
 use crate::fetch::{Pull, Snapshot};
 use crate::repo::{Repo, RepoError};
 use crate::store::{Confidence, Evidence, EvidenceType, Verdict};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// At most this many conflicting files become evidence.
 const MAX_CONFLICT_FILES: usize = 10;
@@ -17,6 +17,8 @@ pub struct MergeChecks {
     pub findings: BTreeMap<u64, Finding>,
     /// PRs that could not be checked (head not fetchable, unrelated history, ...).
     pub failed: Vec<(u64, RepoError)>,
+    /// Why the batched blob fetch failed; git then fetches blobs one by one.
+    pub prefetch_failed: Option<RepoError>,
 }
 
 /// Merge-check every open PR based on the scanned branch.
@@ -42,7 +44,10 @@ pub fn check_all(
         head_tree: repo.git(&["rev-parse", &format!("{head}^{{tree}}")], token)?,
         branch: &snapshot.branch,
     };
-    let mut checks = MergeChecks::default();
+    let mut checks = MergeChecks {
+        prefetch_failed: prefetch(repo, &pulls, token).err(),
+        ..Default::default()
+    };
     for pull in pulls {
         match check(&git, &pull.head.sha) {
             Ok(Some(f)) => {
@@ -53,6 +58,26 @@ pub fn check_all(
         }
     }
     Ok(checks)
+}
+
+/// Fetch in one request the blobs `git merge-tree` reads for these PRs: both sides of each PR's
+/// changes and of the branch's changes since the PR branched.
+fn prefetch(repo: &Repo, pulls: &[&Pull], token: Option<&str>) -> Result<(), RepoError> {
+    let head = repo.head_sha.as_str();
+    let mut blobs = HashSet::new();
+    let mut bases = HashSet::new();
+    for pull in pulls {
+        let pr = pull.head.sha.as_str();
+        let Ok(base) = repo.git(&["merge-base", head, pr], token) else {
+            continue;
+        };
+        blobs.extend(repo.diff_blobs(&base, pr)?);
+        bases.insert(base);
+    }
+    for base in bases {
+        blobs.extend(repo.diff_blobs(&base, head)?);
+    }
+    repo.fetch_blobs(&blobs, token)
 }
 
 /// The repo plus what every PR is merged into.
@@ -316,6 +341,7 @@ mod tests {
         let repo = remote.repo();
         let checks = check_all(&repo, &snapshot(&repo, pulls), None).unwrap();
         assert!(checks.failed.is_empty(), "{:?}", checks.failed);
+        assert!(checks.prefetch_failed.is_none(), "{checks:?}");
         checks.findings
     }
 
@@ -356,6 +382,26 @@ mod tests {
                 ),
             }]
         );
+    }
+
+    #[test]
+    fn blobs_merge_tree_reads_are_fetched_up_front() {
+        let r = Remote::new();
+        let base = sh(&r.work(), &["rev-parse", "HEAD"]);
+        let main = r.commit(&[("a.txt", "main\na2\na3\n")], "main");
+        r.push(None);
+        r.checkout(&base);
+        // b.txt changes on the PR side only, so merge-tree never reads it: only the prefetch does.
+        let pr = r.commit(&[("a.txt", "pr\na2\na3\n"), ("b.txt", "pr\n")], "pr");
+        r.push(Some(2));
+
+        let repo = r.repo();
+        check_all(&repo, &snapshot(&repo, &[(2, &pr, "main")]), None).unwrap();
+        let objects = sh(
+            &repo.path,
+            &["rev-list", "--objects", "--missing=print", &main, &pr],
+        );
+        assert!(!objects.lines().any(|l| l.starts_with('?')), "{objects}");
     }
 
     #[test]
@@ -419,7 +465,12 @@ mod tests {
             &repo,
             &[(5, &pr, "main"), (6, &pr, "release"), (7, missing, "main")],
         );
-        let MergeChecks { findings, failed } = check_all(&repo, &snap, None).unwrap();
+        let MergeChecks {
+            findings,
+            failed,
+            prefetch_failed,
+        } = check_all(&repo, &snap, None).unwrap();
+        assert!(prefetch_failed.is_none(), "{prefetch_failed:?}");
         assert_eq!(findings.keys().copied().collect::<Vec<_>>(), [5]);
         assert_eq!(findings[&5].verdict, Verdict::Conflicts);
         assert_eq!(failed.len(), 1);

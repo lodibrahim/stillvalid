@@ -150,6 +150,9 @@ async fn main() -> Result<()> {
                 snapshot.branch,
                 started.elapsed().as_secs_f64(),
             );
+            if let Some(err) = &checks.prefetch_failed {
+                eprintln!("stillvalid: could not batch-fetch blobs for merge checks, fetching them one by one: {err}");
+            }
             if let Some((number, err)) = checks.failed.first() {
                 eprintln!(
                     "stillvalid: could not merge-check {} PRs (first: #{number}: {err})",
@@ -163,6 +166,9 @@ async fn main() -> Result<()> {
                 "stillvalid: checked the code issues name ({:.1}s)",
                 started.elapsed().as_secs_f64(),
             );
+            if let Some(err) = &code.prefetch_failed {
+                eprintln!("stillvalid: could not batch-fetch blobs for code checks, fetching them one by one: {err}");
+            }
             if let Some((number, err)) = code.failed.first() {
                 eprintln!(
                     "stillvalid: could not code-check {} issues (first: #{number}: {err})",
