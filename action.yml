@@ -1,4 +1,3 @@
-# DRAFT — depends on release binaries that do not exist yet (see docs/ROADMAP.md, "Action").
 name: stillvalid
 description: Check whether open issues and PRs are still valid against the current code, with evidence.
 author: lodibrahim
@@ -8,51 +7,131 @@ branding:
 
 inputs:
   mode:
-    description: basic | free-ai | pro-ai
-    default: free-ai
+    description: basic (free-ai and pro-ai are not built yet)
+    default: basic
   branch:
     description: Branch where development happens (default = repo default branch)
     default: ""
   api-key:
-    description: LLM API key for pro-ai mode
+    description: LLM API key, for pro-ai mode once it exists (unused today)
     default: ""
   version:
-    description: stillvalid release to use
+    description: stillvalid release to use, `latest` or a tag such as v0.1.0
     default: latest
   publish-pages:
-    description: Publish report.json and the dashboard to the gh-pages branch
+    description: Publish report.json, index.html and badge.json to stillvalid/ on the gh-pages branch
     default: "true"
+  labels:
+    description: "Apply verdict labels to issues and PRs (needs `issues: write`)"
+    default: "false"
+  summary-issue:
+    description: 'Create or update the pinned "Backlog health" issue (needs `issues: write`)'
+    default: "false"
 
 runs:
   using: composite
   steps:
     - name: Install stillvalid
+      if: runner.os != 'Windows'
       shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        STILLVALID_INSTALL_DIR: ${{ runner.temp }}/stillvalid-bin
+        STILLVALID_NO_MODIFY_PATH: "1"
       run: |
         set -euo pipefail
-        # TODO: switch to the cargo-dist installer once releases exist
-        curl -sSfL "https://github.com/lodibrahim/stillvalid/releases/${{ inputs.version == 'latest' && 'latest/download' || format('download/{0}', inputs.version) }}/stillvalid-installer.sh" | sh
+        if [ "$VERSION" = latest ]; then
+          url="https://github.com/lodibrahim/stillvalid/releases/latest/download/stillvalid-installer.sh"
+        elif [[ "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          url="https://github.com/lodibrahim/stillvalid/releases/download/$VERSION/stillvalid-installer.sh"
+        else
+          echo "::error::invalid stillvalid version '$VERSION' (use latest or a release tag)"
+          exit 1
+        fi
+        installer="$RUNNER_TEMP/stillvalid-installer.sh"
+        if ! curl -fsSL --retry 3 -o "$installer" "$url"; then
+          echo "::error::no stillvalid release '$VERSION' at $url; see https://github.com/lodibrahim/stillvalid/releases"
+          exit 1
+        fi
+        sh "$installer" --quiet
+
+    - name: Install stillvalid
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        VERSION: ${{ inputs.version }}
+        STILLVALID_INSTALL_DIR: ${{ runner.temp }}/stillvalid-bin
+        STILLVALID_NO_MODIFY_PATH: "1"
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:VERSION -eq 'latest') {
+          $url = 'https://github.com/lodibrahim/stillvalid/releases/latest/download/stillvalid-installer.ps1'
+        } elseif ($env:VERSION -cmatch '^[A-Za-z0-9._-]+$') {
+          $url = "https://github.com/lodibrahim/stillvalid/releases/download/$env:VERSION/stillvalid-installer.ps1"
+        } else {
+          Write-Output "::error::invalid stillvalid version '$env:VERSION' (use latest or a release tag)"
+          exit 1
+        }
+        $installer = Join-Path $env:RUNNER_TEMP 'stillvalid-installer.ps1'
+        try {
+          Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+        } catch {
+          Write-Output "::error::no stillvalid release '$env:VERSION' at $url; see https://github.com/lodibrahim/stillvalid/releases"
+          exit 1
+        }
+        pwsh -NoProfile -ExecutionPolicy Bypass -File $installer
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Fetch previous report
       shell: bash
-      run: |
-        git fetch origin gh-pages --depth 1 2>/dev/null && git show origin/gh-pages:stillvalid/report.json > previous.json || echo '{}' > previous.json
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PAGES_DIR: ${{ runner.temp }}/stillvalid-pages
+      run: bash "$GITHUB_ACTION_PATH/scripts/gh-pages.sh" fetch
 
     - name: Scan
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
         STILLVALID_API_KEY: ${{ inputs.api-key }}
+        MODE: ${{ inputs.mode }}
+        BRANCH: ${{ inputs.branch }}
+        LABELS: ${{ inputs.labels }}
+        SUMMARY_ISSUE: ${{ inputs.summary-issue }}
+        PUBLISH_PAGES: ${{ inputs.publish-pages }}
+        PAGES_DIR: ${{ runner.temp }}/stillvalid-pages
+        SITE_DIR: ${{ runner.temp }}/stillvalid-site
       run: |
-        stillvalid scan "${{ github.repository }}" \
-          --mode "${{ inputs.mode }}" \
-          ${{ inputs.branch != '' && format('--branch {0}', inputs.branch) || '' }} \
-          --previous previous.json \
-          --out report.json \
-          --html .
+        set -euo pipefail
+        args=(scan "$GITHUB_REPOSITORY" --mode "$MODE" --out "$SITE_DIR/report.json" --html "$SITE_DIR")
+        if [ -n "$BRANCH" ]; then
+          args+=(--branch "$BRANCH")
+        fi
+        if [ -f "$PAGES_DIR/stillvalid/report.json" ]; then
+          args+=(--previous "$PAGES_DIR/stillvalid/report.json")
+        fi
+        if [ "$LABELS" = "true" ]; then
+          args+=(--labels)
+        fi
+        if [ "$SUMMARY_ISSUE" = "true" ]; then
+          args+=(--summary-issue)
+        fi
+        if [ "$PUBLISH_PAGES" = "true" ]; then
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          path="${GITHUB_REPOSITORY#*/}/"
+          if [ "$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')" = "$owner.github.io/" ]; then
+            path=""
+          fi
+          args+=(--dashboard-url "https://$owner.github.io/${path}stillvalid/")
+        fi
+        mkdir -p "$SITE_DIR"
+        "$RUNNER_TEMP/stillvalid-bin/bin/stillvalid" "${args[@]}"
 
     - name: Publish to gh-pages
       if: inputs.publish-pages == 'true'
       shell: bash
-      run: |
-        echo "TODO: commit report.json + index.html to gh-pages under stillvalid/"
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PAGES_DIR: ${{ runner.temp }}/stillvalid-pages
+        SITE_DIR: ${{ runner.temp }}/stillvalid-site
+      run: bash "$GITHUB_ACTION_PATH/scripts/gh-pages.sh" publish

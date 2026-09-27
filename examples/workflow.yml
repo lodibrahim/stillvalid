@@ -5,20 +5,20 @@ on:
   workflow_dispatch:
 
 permissions:
-  issues: write          # labels + pinned summary; use `read` for dashboard only
+  contents: write        # publish the report to the gh-pages branch
+  issues: read           # set to `write` to enable labels / summary-issue below
   pull-requests: read
-  contents: write        # publish report to gh-pages
-  models: read           # free-ai mode (GitHub Models)
+
+concurrency: stillvalid  # two runs never race the gh-pages push
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      # No actions/checkout needed: stillvalid clones the repo itself.
       - uses: lodibrahim/stillvalid@v1
         with:
-          mode: free-ai
-          branch: main
-          # api-key: ${{ secrets.LLM_API_KEY }}   # only for mode: pro-ai
+          mode: basic
+          # branch: main          # default: the repo's default branch
+          # labels: "true"        # verdict labels on issues/PRs (needs issues: write)
+          # summary-issue: "true" # pinned "Backlog health" issue (needs issues: write)
