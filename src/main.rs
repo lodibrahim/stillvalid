@@ -159,7 +159,7 @@ async fn main() -> Result<()> {
             }
 
             let started = Instant::now();
-            let code = code::check_all(&local, &snapshot);
+            let code = code::check_all(&local, &snapshot, token.as_deref());
             eprintln!(
                 "stillvalid: checked the code issues name ({:.1}s)",
                 started.elapsed().as_secs_f64(),

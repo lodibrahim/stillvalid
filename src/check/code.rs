@@ -34,13 +34,14 @@ pub struct CodeChecks {
 
 /// Run [`code_gone`] on every issue that [`issues::likely_fixed`] has no finding for. Only saves
 /// git work: `store::build_report` decides that a PR or commit that says it fixes the issue wins.
-pub fn check_all(repo: &Repo, snapshot: &Snapshot) -> CodeChecks {
+pub fn check_all(repo: &Repo, snapshot: &Snapshot, token: Option<&str>) -> CodeChecks {
+    let token = repo.fetch_token(token);
     let mut checks = CodeChecks::default();
     for issue in &snapshot.issues {
         if issues::likely_fixed(issue, snapshot).is_some() {
             continue;
         }
-        match code_gone(issue, repo) {
+        match code_gone(issue, repo, token) {
             Ok(Some(f)) => {
                 checks.findings.insert(issue.number, f);
             }
@@ -58,7 +59,12 @@ pub fn check_all(repo: &Repo, snapshot: &Snapshot) -> CodeChecks {
 /// stack frame, panic location, blob URL `#L`); a plain mention may be a command argument or
 /// input file, so it can only block. References that never existed in the repo (repro files,
 /// other repos) are ignored.
-pub fn code_gone(issue: &Issue, repo: &Repo) -> Result<Option<Finding>, RepoError> {
+/// `token` authenticates the lazy blob fetches of a blobless clone.
+pub fn code_gone(
+    issue: &Issue,
+    repo: &Repo,
+    token: Option<&str>,
+) -> Result<Option<Finding>, RepoError> {
     let Some(base) = repo.commit_before(issue.created_at)? else {
         return Ok(None);
     };
@@ -81,7 +87,7 @@ pub fn code_gone(issue: &Issue, repo: &Repo) -> Result<Option<Finding>, RepoErro
                 if !seen_paths.insert((path.clone(), tied)) {
                     continue;
                 }
-                match path_gone(repo, &base, &path)? {
+                match path_gone(repo, &base, &path, token)? {
                     State::Gone(_) if !tied => State::Absent,
                     state => state,
                 }
@@ -94,7 +100,7 @@ pub fn code_gone(issue: &Issue, repo: &Repo) -> Result<Option<Finding>, RepoErro
                 if needle.chars().count() < min || !seen_needles.insert(needle.to_string()) {
                     continue;
                 }
-                string_gone(repo, &base, needle, word)?
+                string_gone(repo, &base, needle, word, token)?
             }
             // Frames also emit their symbol and path, which are checked on their own.
             RefKind::Frame => continue,
@@ -165,13 +171,13 @@ fn resolve_path(
 }
 
 /// Follow `path` from `base` to the scanned commit through renames.
-fn path_gone(repo: &Repo, base: &str, path: &str) -> Result<State, RepoError> {
+fn path_gone(repo: &Repo, base: &str, path: &str, token: Option<&str>) -> Result<State, RepoError> {
     let mut from = base.to_string();
     let mut current = path.to_string();
     let mut moves = Vec::new();
     for _ in 0..MAX_RENAMES {
         if repo.is_file(&repo.head_sha, &current) {
-            let (lines, changed) = repo.lines_changed(base, path, &current)?;
+            let (lines, changed) = repo.lines_changed(base, path, &current, token)?;
             if lines < REWRITTEN_MIN_LINES || changed * 100 < REWRITTEN_PERCENT * lines {
                 return Ok(State::Present);
             }
@@ -186,7 +192,7 @@ fn path_gone(repo: &Repo, base: &str, path: &str) -> Result<State, RepoError> {
                 ),
             }));
         }
-        match repo.removal(&from, &current)? {
+        match repo.removal(&from, &current, token)? {
             Some((commit, Some(to))) => {
                 moves.push(to.clone());
                 current = to;
@@ -219,14 +225,20 @@ fn moved_note(path: &str, moves: &[String]) -> String {
     format!("Renamed {path} -> {}, ", moves.join(" -> "))
 }
 
-fn string_gone(repo: &Repo, base: &str, needle: &str, word: bool) -> Result<State, RepoError> {
-    if repo.grep(&repo.head_sha, needle, word)?.is_some() {
+fn string_gone(
+    repo: &Repo,
+    base: &str,
+    needle: &str,
+    word: bool,
+    token: Option<&str>,
+) -> Result<State, RepoError> {
+    if repo.grep(&repo.head_sha, needle, word, token)?.is_some() {
         return Ok(State::Present);
     }
-    let Some((path, line)) = repo.grep(base, needle, word)? else {
+    let Some((path, line)) = repo.grep(base, needle, word, token)? else {
         return Ok(State::Absent);
     };
-    let Some(commit) = repo.last_change_of(base, needle)? else {
+    let Some(commit) = repo.last_change_of(base, needle, word, token)? else {
         return Ok(State::Absent);
     };
     Ok(State::Gone(Evidence {
@@ -342,7 +354,7 @@ mod tests {
             ("src/main.rs", Some("fn main() {}\n")),
         ]);
         let del = g.commit(&[("src/pool.rs", None)]);
-        let f = code_gone(&issue("Panics in src/pool.rs:3"), &g.repo())
+        let f = code_gone(&issue("Panics in src/pool.rs:3"), &g.repo(), None)
             .unwrap()
             .unwrap();
         assert_eq!(f.confidence, Confidence::Medium);
@@ -363,7 +375,7 @@ mod tests {
         g.commit(&[("src/search_stream.rs", Some(POOL))]);
         g.commit(&[("src/search_stream.rs", None)]);
         let body = "```\n$ rg -e foo -f src/search_stream.rs\nError parsing regex\n```";
-        assert_eq!(code_gone(&issue(body), &g.repo()).unwrap(), None);
+        assert_eq!(code_gone(&issue(body), &g.repo(), None).unwrap(), None);
     }
 
     #[test]
@@ -375,8 +387,8 @@ mod tests {
         ]);
         g.commit(&[("src/pool.rs", None)]);
         let body = "src/pool.rs:1 is called from src/main.rs";
-        assert_eq!(code_gone(&issue(body), &g.repo()).unwrap(), None);
-        let f = code_gone(&issue("src/pool.rs and src/pool.rs:1"), &g.repo());
+        assert_eq!(code_gone(&issue(body), &g.repo(), None).unwrap(), None);
+        let f = code_gone(&issue("src/pool.rs and src/pool.rs:1"), &g.repo(), None);
         assert!(f.unwrap().is_some());
     }
 
@@ -386,12 +398,12 @@ mod tests {
         g.commit(&[("src/pool.rs", Some(&lines(30, "pool")))]);
         g.mv("src/pool.rs", "crates/pool.rs");
         assert_eq!(
-            code_gone(&issue("See src/pool.rs:3"), &g.repo()).unwrap(),
+            code_gone(&issue("See src/pool.rs:3"), &g.repo(), None).unwrap(),
             None
         );
 
         let del = g.commit(&[("crates/pool.rs", None)]);
-        let f = code_gone(&issue("See src/pool.rs:3"), &g.repo())
+        let f = code_gone(&issue("See src/pool.rs:3"), &g.repo(), None)
             .unwrap()
             .unwrap();
         assert_eq!(f.evidence[0].reference, short_sha(&del));
@@ -407,7 +419,7 @@ mod tests {
         let base = g.commit(&[("src/pool.rs", Some(&lines(40, "old")))]);
         let text = lines(10, "old") + &lines(30, "new");
         g.commit(&[("src/pool.rs", Some(&text))]);
-        let f = code_gone(&issue("src/pool.rs:1"), &g.repo())
+        let f = code_gone(&issue("src/pool.rs:1"), &g.repo(), None)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -437,8 +449,14 @@ mod tests {
             ("src/tiny.rs", Some(&lines(10, "new"))),
         ]);
         let repo = g.repo();
-        assert_eq!(code_gone(&issue("src/pool.rs:1"), &repo).unwrap(), None);
-        assert_eq!(code_gone(&issue("src/tiny.rs:1"), &repo).unwrap(), None);
+        assert_eq!(
+            code_gone(&issue("src/pool.rs:1"), &repo, None).unwrap(),
+            None
+        );
+        assert_eq!(
+            code_gone(&issue("src/tiny.rs:1"), &repo, None).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -449,7 +467,7 @@ mod tests {
         g.commit(&[("src/late.rs", Some(POOL))]);
         g.commit(&[("src/late.rs", None)]);
         let body = "repro in test/repro.rs:1, see src/late.rs:1";
-        assert_eq!(code_gone(&issue(body), &g.repo()).unwrap(), None);
+        assert_eq!(code_gone(&issue(body), &g.repo(), None).unwrap(), None);
     }
 
     #[test]
@@ -461,7 +479,7 @@ mod tests {
         ]);
         g.commit(&[("docs/guide.md", None), ("Cargo.toml", None)]);
         let body = "docs/guide.md:1 and Cargo.toml:1";
-        assert_eq!(code_gone(&issue(body), &g.repo()).unwrap(), None);
+        assert_eq!(code_gone(&issue(body), &g.repo(), None).unwrap(), None);
     }
 
     #[test]
@@ -473,7 +491,7 @@ mod tests {
         ]);
         let del = g.commit(&[("src/pool.rs", None), ("crates/a/src/lib.rs", None)]);
         let body = "`a/src/pool.rs:3`\n\nat /home/u/proj/crates/a/src/lib.rs:3";
-        let f = code_gone(&issue(body), &g.repo()).unwrap().unwrap();
+        let f = code_gone(&issue(body), &g.repo(), None).unwrap().unwrap();
         let notes: Vec<&str> = f.evidence.iter().map(|e| e.note.as_str()).collect();
         assert_eq!(
             notes,
@@ -491,7 +509,7 @@ mod tests {
         g.commit(&[("src/pool.rs", Some(POOL))]);
         g.commit(&[("src/pool.rs", None)]);
         assert_eq!(
-            code_gone(&issue("my crate's test/src/pool.rs:1"), &g.repo()).unwrap(),
+            code_gone(&issue("my crate's test/src/pool.rs:1"), &g.repo(), None).unwrap(),
             None
         );
     }
@@ -501,7 +519,12 @@ mod tests {
         let mut g = Git::new();
         g.commit(&[("src/pool.rs", Some("fn keep() {}\nfn release_slot() {}\n"))]);
         let removed = g.commit(&[("src/pool.rs", Some("fn keep() {}\n"))]);
-        let f = code_gone(&issue("`Pool::release_slot` hangs"), &g.repo())
+        // A longer name containing it is not the removal.
+        g.commit(&[(
+            "src/pool.rs",
+            Some("fn keep() {}\nfn release_slots_v2() {}\n"),
+        )]);
+        let f = code_gone(&issue("`Pool::release_slot` hangs"), &g.repo(), None)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -525,12 +548,18 @@ mod tests {
         )]);
         let removed = g.commit(&[("src/pool.rs", Some("fn release_slot() {}\n"))]);
         let repo = g.repo();
-        assert_eq!(code_gone(&issue("`release_slot`"), &repo).unwrap(), None);
+        assert_eq!(
+            code_gone(&issue("`release_slot`"), &repo, None).unwrap(),
+            None
+        );
         // `run` is too short to count.
-        assert_eq!(code_gone(&issue("`Pool::run()`"), &repo).unwrap(), None);
+        assert_eq!(
+            code_gone(&issue("`Pool::run()`"), &repo, None).unwrap(),
+            None
+        );
 
         let panic = "thread 'main' panicked at src/gone.rs:1:5:\npool closed while waiting";
-        let f = code_gone(&issue(panic), &repo).unwrap().unwrap();
+        let f = code_gone(&issue(panic), &repo, None).unwrap().unwrap();
         assert_eq!(f.evidence[0].reference, short_sha(&removed));
         assert_eq!(
             f.evidence[0].note,
@@ -544,6 +573,6 @@ mod tests {
         g.commit(&[("src/pool.rs", Some(POOL))]);
         let mut old = issue("src/pool.rs:1");
         old.created_at = "2025-01-01T00:00:00Z".parse().unwrap();
-        assert_eq!(code_gone(&old, &g.repo()).unwrap(), None);
+        assert_eq!(code_gone(&old, &g.repo(), None).unwrap(), None);
     }
 }

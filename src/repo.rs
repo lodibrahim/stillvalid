@@ -226,6 +226,7 @@ impl Repo {
         &self,
         from: &str,
         path: &str,
+        token: Option<&str>,
     ) -> Result<Option<(String, Option<String>)>, RepoError> {
         let range = format!("{from}..{}", self.head_sha);
         let commit = self.git(
@@ -256,7 +257,7 @@ impl Repo {
                 &parent,
                 &commit,
             ],
-            None,
+            token,
         )?;
         // Each rename: `R<score>\0<old>\0<new>\0`.
         let fields: Vec<&str> = out.split('\0').collect();
@@ -274,11 +275,12 @@ impl Repo {
         from: &str,
         old: &str,
         new: &str,
+        token: Option<&str>,
     ) -> Result<(usize, usize), RepoError> {
         let old = format!("{from}:{old}");
-        let text = self.git(&["cat-file", "-p", &old], None)?;
+        let text = self.git(&["cat-file", "-p", &old], token)?;
         let new = format!("{}:{new}", self.head_sha);
-        let numstat = self.git(&["diff", "--numstat", &old, &new], None)?;
+        let numstat = self.git(&["diff", "--numstat", &old, &new], token)?;
         // `<added>\t<deleted>\t<path>`; binary files show `-`.
         let deleted = numstat
             .split('\t')
@@ -295,6 +297,7 @@ impl Repo {
         rev: &str,
         needle: &str,
         word: bool,
+        token: Option<&str>,
     ) -> Result<Option<(String, u32)>, RepoError> {
         let mut args = vec!["grep", "-z", "-n", "-I", "-F", "-e", needle];
         if word {
@@ -302,7 +305,7 @@ impl Repo {
         }
         args.extend([rev, "--"]);
         // Exit 1 means no match. Each match: `<rev>:<path>\0<line>\0<text>\n`.
-        let out = git_output(Some(&self.path), &args, None, &[0, 1])?;
+        let out = git_output(Some(&self.path), &args, token, &[0, 1])?;
         let mut fields = out.split('\0');
         let path = fields
             .next()
@@ -311,23 +314,44 @@ impl Repo {
         Ok(path.zip(line).map(|(p, l)| (p.to_string(), l)))
     }
 
-    /// The last first-parent commit in `from..head_sha` that changed how often `needle`
-    /// appears (`git log -S`).
-    pub fn last_change_of(&self, from: &str, needle: &str) -> Result<Option<String>, RepoError> {
+    /// The last first-parent commit in `from..head_sha` whose diff adds or removes a line
+    /// containing `needle` (as a whole word with `word`, like [`Repo::grep`]). When `needle` is
+    /// in `from` but not at `head_sha`, that is the commit that removed its last occurrence.
+    pub fn last_change_of(
+        &self,
+        from: &str,
+        needle: &str,
+        word: bool,
+        token: Option<&str>,
+    ) -> Result<Option<String>, RepoError> {
         let range = format!("{from}..{}", self.head_sha);
-        let pickaxe = format!("-S{needle}");
-        let out = self.git(
-            &[
-                "log",
-                "--first-parent",
-                "--format=%H",
-                "-1",
-                &pickaxe,
-                &range,
-            ],
-            None,
-        )?;
+        let pickaxe = if word {
+            // Symbols are identifier characters only, so they need no regex escaping.
+            format!("-G(^|[^A-Za-z0-9_]){needle}([^A-Za-z0-9_]|$)")
+        } else {
+            format!("-S{needle}")
+        };
+        let args = [
+            "log",
+            "--first-parent",
+            "--format=%H",
+            "-1",
+            &pickaxe,
+            &range,
+        ];
+        let out = self.git(&args, token)?;
         Ok((!out.is_empty()).then_some(out))
+    }
+
+    /// `token`, unless the repo already sends its own github.com auth header: actions/checkout
+    /// persists one, and a second one gets requests rejected.
+    pub fn fetch_token<'a>(&self, token: Option<&'a str>) -> Option<&'a str> {
+        let own_header = [
+            "config",
+            "--get-all",
+            "http.https://github.com/.extraheader",
+        ];
+        token.filter(|_| self.git(&own_header, None).is_err())
     }
 }
 
