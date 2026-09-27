@@ -189,7 +189,7 @@ fn is_author(activity: &PullActivity, poster: &Option<String>) -> bool {
 }
 
 /// "9 months" from 60 days up, "3 weeks" from 7 days up, otherwise days.
-fn ago(d: Duration) -> String {
+pub(crate) fn ago(d: Duration) -> String {
     let days = d.num_days();
     let (n, unit) = match days {
         60.. => (days / 30, "month"),

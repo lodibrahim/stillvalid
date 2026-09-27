@@ -49,7 +49,7 @@ runs:
           ${{ inputs.branch != '' && format('--branch {0}', inputs.branch) || '' }} \
           --previous previous.json \
           --out report.json \
-          --html index.html
+          --html .
 
     - name: Publish to gh-pages
       if: inputs.publish-pages == 'true'

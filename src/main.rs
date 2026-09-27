@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use stillvalid::check::pulls::PullThresholds;
 use stillvalid::check::{code, merge};
-use stillvalid::{fetch, incremental, repo, store};
+use stillvalid::{fetch, incremental, repo, report, store};
 
 #[derive(Parser)]
 #[command(
@@ -44,7 +44,7 @@ enum Command {
         #[arg(long, default_value = "report.json")]
         out: PathBuf,
 
-        /// Also write the HTML dashboard here
+        /// Also write the dashboard (index.html) and shields.io badge (badge.json) into this directory
         #[arg(long)]
         html: Option<PathBuf>,
 
@@ -92,9 +92,6 @@ async fn main() -> Result<()> {
             unreviewed_after_days,
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
-            if html.is_some() {
-                eprintln!("stillvalid: --html is not implemented yet; ignoring");
-            }
             // Read it before the long fetch so a bad file fails fast; a missing one means a first run.
             let previous = match previous {
                 Some(path) if !path.exists() => {
@@ -215,6 +212,14 @@ async fn main() -> Result<()> {
                 report.summary.pulls.conflicts,
                 report.summary.pulls.superseded,
             );
+            if let Some(dir) = &html {
+                report::write_site(&report, dir)
+                    .with_context(|| format!("writing the dashboard to {}", dir.display()))?;
+                eprintln!(
+                    "stillvalid: wrote {} and badge.json",
+                    dir.join("index.html").display()
+                );
+            }
             Ok(())
         }
     }
