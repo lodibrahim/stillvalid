@@ -4,6 +4,7 @@ Newest first. Each entry: decision · why · alternatives considered.
 
 | Date | Decision | Why | Alternatives |
 |---|---|---|---|
+| 2026-09-27 | Raise `rust-version` to **1.85** (supersedes keeping 1.80) | Lets Dependabot move to octocrab 0.54 and sha2 0.11; 1.85 is from Feb 2025, so few users are affected | Stay on 1.80 and ignore newer releases in Dependabot |
 | 2026-09-27 | Issue references come from GraphQL `timelineItems` (cross-referenced, connected, referenced events); **same-repo only**; PRs deduplicated with `will_close` = "fixes #N" or sidebar link; first 100 events per issue, 50 issues per page | One query covers 50 issues (~60 requests for 3,000 issues vs one REST call each); other repos' PRs can't fix this repo's code | REST timeline per issue; `closedByPullRequestsReferences` (misses plain mentions and commits) |
 | 2026-09-27 | Without a token, timelines are **skipped** with a warning instead of failing | GitHub's GraphQL API requires auth; `basic` mode must still run anywhere | Fail the scan |
 | 2026-09-27 | References are held in memory, **not written to `report.json`** yet | They surface as `evidence` once the "referenced by merged PR" heuristic exists; no schema change needed | Add a `references` field now |
