@@ -3,9 +3,10 @@
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const MIN_GIT: (u32, u32) = (2, 38);
 
@@ -122,11 +123,12 @@ impl Repo {
     /// Every file at `head_sha` and its blob SHA. Reads trees only, so a blobless clone
     /// fetches nothing.
     pub fn blob_shas(&self) -> Result<HashMap<String, String>, RepoError> {
-        let out = git(
-            Some(&self.path),
-            &["ls-tree", "-r", "-z", "--full-tree", &self.head_sha],
-            None,
-        )?;
+        self.blobs_at(&self.head_sha)
+    }
+
+    /// Every file at `rev` and its blob SHA. Reads trees only.
+    fn blobs_at(&self, rev: &str) -> Result<HashMap<String, String>, RepoError> {
+        let out = self.git(&["ls-tree", "-r", "-z", "--full-tree", rev], None)?;
         // Each entry: `<mode> <type> <sha>\t<path>`.
         Ok(out
             .split('\0')
@@ -165,6 +167,75 @@ impl Repo {
         }
     }
 
+    /// Blobs at `from` and on both sides of the first-parent diffs in `from..head_sha`: what
+    /// grep at `from`, pickaxe over the range, and diffs of its commits read. Reads trees only.
+    pub fn history_blobs(&self, from: &str) -> Result<HashSet<String>, RepoError> {
+        let mut blobs: HashSet<String> = self.blobs_at(from)?.into_values().collect();
+        let range = format!("{from}..{}", self.head_sha);
+        let diffs = self.git(
+            &[
+                "log",
+                "--first-parent",
+                "--format=",
+                "--raw",
+                "--no-renames",
+                "--no-abbrev",
+                &range,
+            ],
+            None,
+        )?;
+        blobs.extend(raw_blobs(&diffs).map(str::to_string));
+        Ok(blobs)
+    }
+
+    /// Blobs on both sides of the diff from `from` to `to`. Reads trees only.
+    pub fn diff_blobs(&self, from: &str, to: &str) -> Result<HashSet<String>, RepoError> {
+        let out = self.git(
+            &["diff", "--raw", "--no-renames", "--no-abbrev", from, to],
+            None,
+        )?;
+        Ok(raw_blobs(&out).map(str::to_string).collect())
+    }
+
+    /// Fetch those of `blobs` that a blobless clone is missing, in one request, so reading them
+    /// later does not make git fetch them one round-trip at a time.
+    pub fn fetch_blobs(
+        &self,
+        blobs: &HashSet<String>,
+        token: Option<&str>,
+    ) -> Result<(), RepoError> {
+        // Lists local objects only; never fetches.
+        let present = self.git(
+            &[
+                "cat-file",
+                "--batch-all-objects",
+                "--unordered",
+                "--batch-check=%(objectname)",
+            ],
+            None,
+        )?;
+        let present: HashSet<&str> = present.lines().collect();
+        let missing: String = blobs
+            .iter()
+            .filter(|sha| !present.contains(sha.as_str()))
+            .map(|sha| format!("{sha}\n"))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let args = [
+            "-c",
+            "fetch.negotiationAlgorithm=noop",
+            "fetch",
+            "--quiet",
+            "--no-write-fetch-head",
+            "--no-tags",
+            "--stdin",
+            "origin",
+        ];
+        git_output(Some(&self.path), &args, token, &[0], Some(&missing)).map(drop)
+    }
+
     /// `git merge-tree --write-tree ours theirs`; writes the result tree to the object store only.
     pub fn merge_tree(
         &self,
@@ -182,7 +253,7 @@ impl Repo {
             theirs,
         ];
         // Exit 1 means conflicts.
-        let stdout = git_output(Some(&self.path), &args, token, &[0, 1])?;
+        let stdout = git_output(Some(&self.path), &args, token, &[0, 1], None)?;
         let mut fields = stdout.split('\0').filter(|f| !f.is_empty());
         Ok(MergeTree {
             tree: fields.next().unwrap_or_default().to_string(),
@@ -305,7 +376,7 @@ impl Repo {
         }
         args.extend([rev, "--"]);
         // Exit 1 means no match. Each match: `<rev>:<path>\0<line>\0<text>\n`.
-        let out = git_output(Some(&self.path), &args, token, &[0, 1])?;
+        let out = git_output(Some(&self.path), &args, token, &[0, 1], None)?;
         let mut fields = out.split('\0');
         let path = fields
             .next()
@@ -353,6 +424,25 @@ impl Repo {
         ];
         token.filter(|_| self.git(&own_header, None).is_err())
     }
+}
+
+/// Blob SHAs in `--raw` diff output, both sides, skipping gitlinks and the all-zero SHA of an
+/// added or deleted side. Each line: `:<old mode> <new mode> <old sha> <new sha> <status>\t<path>`.
+fn raw_blobs(out: &str) -> impl Iterator<Item = &str> {
+    out.lines().flat_map(|l| {
+        let f: Vec<&str> = l
+            .split('\t')
+            .next()
+            .unwrap_or_default()
+            .split(' ')
+            .collect();
+        let blob = move |mode: usize, sha: usize| {
+            let mode = f.get(mode)?.trim_start_matches(':');
+            let sha = *f.get(sha)?;
+            (mode != "160000" && sha.bytes().any(|b| b != b'0')).then_some(sha)
+        };
+        [blob(0, 2), blob(1, 3)].into_iter().flatten()
+    })
 }
 
 /// Result of merging two commits without touching the index or working tree.
@@ -411,20 +501,38 @@ fn parse_git_version(s: &str) -> Option<(u32, u32)> {
 
 /// Run git and return trimmed stdout.
 fn git(dir: Option<&Path>, args: &[&str], token: Option<&str>) -> Result<String, RepoError> {
-    Ok(git_output(dir, args, token, &[0])?.trim().to_string())
+    Ok(git_output(dir, args, token, &[0], None)?.trim().to_string())
 }
 
-/// Run git and return raw stdout; exit codes outside `ok` are errors.
+/// Run git with `input` (if any) on stdin and return raw stdout; exit codes outside `ok` are
+/// errors.
 fn git_output(
     dir: Option<&Path>,
     args: &[&str],
     token: Option<&str>,
     ok: &[i32],
+    input: Option<&str>,
 ) -> Result<String, RepoError> {
-    let out = git_command(dir, token)
-        .args(args)
-        .output()
-        .map_err(RepoError::GitMissing)?;
+    let mut cmd = git_command(dir, token);
+    cmd.args(args);
+    let out = match input {
+        None => cmd.output(),
+        Some(input) => cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                let mut stdin = child.stdin.take().expect("stdin is piped");
+                let input = input.to_string();
+                // Write from another thread so a full stdout or stderr pipe cannot deadlock.
+                let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+                let out = child.wait_with_output()?;
+                writer.join().expect("stdin writer panicked")?;
+                Ok(out)
+            }),
+    }
+    .map_err(RepoError::GitMissing)?;
     if !out.status.code().is_some_and(|c| ok.contains(&c)) {
         return Err(RepoError::Git {
             args: args.join(" "),
@@ -632,6 +740,47 @@ mod tests {
                 &["rev-parse", &format!("{first}:src/b c.rs")]
             )
         );
+    }
+
+    #[test]
+    fn prefetch_fetches_blobs_at_from_and_in_later_diffs() {
+        let remote = Remote::new();
+        remote.commit("a.txt", "zero");
+        let from = remote.commit("a.txt", "one");
+        remote.commit("a.txt", "two");
+        let head = remote.commit("b.txt", "three");
+        let repo =
+            Repo::clone_or_update(&remote.url(), &remote.cache(), "main", &head, None).unwrap();
+        // `<sha>` for each blob missing from the blobless clone; lists without fetching.
+        let missing = || {
+            let out = sh(
+                &repo.path,
+                &["rev-list", "--objects", "--missing=print", &head],
+            );
+            out.lines().filter(|l| l.starts_with('?')).count()
+        };
+        // "zero" before from and "one" at from; "two" and "three" came with the checkout.
+        assert_eq!(missing(), 2);
+        repo.fetch_blobs(&repo.history_blobs(&from).unwrap(), None)
+            .unwrap();
+        // Only "zero", which is neither at from nor in a later diff, is still missing.
+        assert_eq!(missing(), 1);
+        // Nothing left to fetch: no request.
+        repo.fetch_blobs(&repo.history_blobs(&from).unwrap(), None)
+            .unwrap();
+    }
+
+    #[test]
+    fn raw_blobs_skips_gitlinks_and_absent_sides() {
+        let (a, b, c) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
+        let zero = "0".repeat(40);
+        let out = format!(
+            ":100644 100644 {a} {b} M\tsrc/x.rs\n\
+             :000000 100644 {zero} {c} A\tnew.rs\n\
+             :160000 160000 {a} {b} M\tvendor/sub\n\
+             \n"
+        );
+        assert_eq!(raw_blobs(&out).collect::<Vec<_>>(), [&a, &b, &c]);
     }
 
     #[test]
