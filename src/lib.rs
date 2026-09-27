@@ -4,6 +4,7 @@
 
 pub mod check;
 pub mod fetch;
+pub mod incremental;
 pub mod index;
 pub mod repo;
 pub mod store;

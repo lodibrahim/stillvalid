@@ -20,6 +20,16 @@ pub enum StoreError {
     },
     #[error("could not serialize report: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("could not read {path}: {source}")]
+    Read {
+        path: String,
+        source: std::io::Error,
+    },
+    #[error("{path} is not a stillvalid report: {source}")]
+    Parse {
+        path: String,
+        source: serde_json::Error,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,7 +79,7 @@ pub struct PullSummary {
     pub cant_tell: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Issue,
@@ -282,6 +292,18 @@ pub fn write_report(report: &Report, path: &Path) -> Result<(), StoreError> {
     })
 }
 
+pub fn read_report(path: &Path) -> Result<Report, StoreError> {
+    let path_str = || path.display().to_string();
+    let json = std::fs::read_to_string(path).map_err(|source| StoreError::Read {
+        path: path_str(),
+        source,
+    })?;
+    serde_json::from_str(&json).map_err(|source| StoreError::Parse {
+        path: path_str(),
+        source,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +424,7 @@ mod tests {
                 checks: Some(CheckState::Success),
                 reviews: vec![],
                 comments: vec![],
+                changed_files: None,
             },
         );
         let r = report(&snap);
@@ -453,10 +476,9 @@ mod tests {
             keys(&our_issue["fingerprint"]),
             keys(&ex_issue["fingerprint"])
         );
-        assert_eq!(
-            keys(&our_pull["fingerprint"]),
-            keys(&ex_pull["fingerprint"])
-        );
+        // `related_files` is filled later by `incremental::fill_fingerprints`.
+        assert_eq!(keys(&our_pull["fingerprint"]), ["head_sha"]);
+        assert_eq!(keys(&ex_pull["fingerprint"]), ["head_sha", "related_files"]);
         assert_eq!(our_issue["kind"], "issue");
         assert_eq!(our_pull["kind"], "pull");
         assert_eq!(our_issue["verdict"], "cant_tell");
@@ -477,7 +499,14 @@ mod tests {
         let path = dir.path().join("report.json");
         let r = report(&snapshot());
         write_report(&r, &path).unwrap();
-        let back: Report = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(back, r);
+        assert_eq!(read_report(&path).unwrap(), r);
+
+        std::fs::write(&path, "{}").unwrap();
+        assert!(matches!(read_report(&path), Err(StoreError::Parse { .. })));
+        let missing = dir.path().join("missing.json");
+        assert!(matches!(
+            read_report(&missing),
+            Err(StoreError::Read { .. })
+        ));
     }
 }

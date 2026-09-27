@@ -21,8 +21,8 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [x] Clone/fetch target repo; dev-branch aware
 - [x] Indexer: extract paths, symbols, error strings, stack frames from issue text
 - [x] `report.json` write per [schema/report.example.json](../schema/report.example.json)
-- [ ] `report.json` read (for `--previous`)
-- [ ] Incremental: skip items whose body hash and related-file SHAs are unchanged
+- [x] `report.json` read (for `--previous`)
+- [x] Incremental: skip items whose body hash and related-file SHAs are unchanged
 
 ### Tier 1 heuristics (`basic`)
 - [x] Issue referenced by merged PR / commit on dev branch → `likely_fixed`

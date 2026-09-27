@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;
 use stillvalid::check::pulls::PullThresholds;
-use stillvalid::{fetch, repo, store};
+use stillvalid::{fetch, incremental, repo, store};
 
 #[derive(Parser)]
 #[command(
@@ -90,9 +90,21 @@ async fn main() -> Result<()> {
             unreviewed_after_days,
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
-            if html.is_some() || previous.is_some() {
-                eprintln!("stillvalid: --html and --previous are not implemented yet; ignoring");
+            if html.is_some() {
+                eprintln!("stillvalid: --html is not implemented yet; ignoring");
             }
+            // Read it before the long fetch so a bad file fails fast; a missing one means a first run.
+            let previous = match previous {
+                Some(path) if !path.exists() => {
+                    eprintln!(
+                        "stillvalid: no previous report at {}; checking everything",
+                        path.display()
+                    );
+                    None
+                }
+                Some(path) => Some(store::read_report(&path)?),
+                None => None,
+            };
 
             let mut gh = octocrab::Octocrab::builder();
             let token = github_token();
@@ -131,12 +143,29 @@ async fn main() -> Result<()> {
                 abandoned_after_days,
                 unreviewed_after_days,
             };
-            let report = store::build_report(
+            let mut report = store::build_report(
                 &snapshot,
                 mode.get_name(),
                 Utc::now().trunc_subsecs(0),
                 &thresholds,
             );
+            let blobs = local
+                .blob_shas()
+                .with_context(|| format!("listing files at {}", local.head_sha))?;
+            incremental::fill_fingerprints(&mut report, &snapshot, &blobs);
+            if let Some(previous) = previous {
+                match incremental::check_previous(&previous, &report) {
+                    Ok(()) => {
+                        let counts = incremental::reuse(&mut report, &previous);
+                        eprintln!(
+                            "stillvalid: incremental: {} reused, {} re-checked ({} new)",
+                            counts.reused, counts.rechecked, counts.new
+                        );
+                    }
+                    Err(e @ incremental::Unusable::Repo { .. }) => return Err(e.into()),
+                    Err(e) => eprintln!("stillvalid: {e}; checking everything"),
+                }
+            }
             store::write_report(&report, &out)?;
             eprintln!(
                 "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed; {} PRs abandoned, {} ready_unreviewed)",

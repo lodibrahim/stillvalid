@@ -42,7 +42,10 @@
       "evidence": [
         { "type": "commit", "ref": "91b0f3e", "note": "Identical change already on main" }
       ],
-      "fingerprint": { "head_sha": "c0ffee1…" },
+      "fingerprint": {
+        "head_sha": "c0ffee1…",
+        "related_files": { "docs/compaction.md": "blob:2d9a…" }
+      },
       "checked_at": "2026-09-27T03:12:00Z"
     }
   ]
