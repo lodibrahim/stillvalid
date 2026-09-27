@@ -57,6 +57,8 @@ pub struct Pull {
     pub created_at: DateTime<Utc>,
     pub head: PullHead,
     pub base: PullBase,
+    #[serde(default)]
+    pub labels: Vec<Label>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

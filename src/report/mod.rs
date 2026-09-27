@@ -1,6 +1,7 @@
 //! Reporter: static outputs rendered from a report (see docs/DESIGN.md §6).
 
 pub mod badge;
+pub mod github;
 pub mod html;
 
 use crate::store::Report;

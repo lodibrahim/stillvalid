@@ -183,6 +183,7 @@ mod tests {
                 base: PullBase {
                     name: "main".into(),
                 },
+                labels: Vec::new(),
             }],
             references: Default::default(),
             reopened_at: Default::default(),
