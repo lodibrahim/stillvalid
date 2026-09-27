@@ -40,7 +40,7 @@ curl -sSf https://…/install.sh | sh     # any Unix
 ```
 
 ```sh
-stillvalid scan owner/repo --mode basic --html report.html
+stillvalid scan owner/repo --mode basic --html site
 ```
 
 ## Use in a repo (planned)
