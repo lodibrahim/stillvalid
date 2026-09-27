@@ -77,14 +77,15 @@ async fn main() -> Result<()> {
             }
 
             let mut gh = octocrab::Octocrab::builder();
-            match github_token() {
-                Some(token) => gh = gh.personal_token(token),
+            let token = github_token();
+            match &token {
+                Some(token) => gh = gh.personal_token(token.clone()),
                 None => eprintln!(
-                    "stillvalid: no GITHUB_TOKEN or `gh auth token`; using unauthenticated API (60 requests/hour)"
+                    "stillvalid: no GITHUB_TOKEN or `gh auth token`; using unauthenticated API (60 requests/hour) and skipping issue timelines"
                 ),
             }
             let snapshot = fetch::Fetcher::new(gh.build()?)
-                .fetch(&repo, branch.as_deref())
+                .fetch(&repo, branch.as_deref(), token.is_some())
                 .await
                 .with_context(|| format!("fetching {repo}"))?;
 
@@ -93,10 +94,11 @@ async fn main() -> Result<()> {
                 store::build_report(&snapshot, mode.get_name(), Utc::now().trunc_subsecs(0));
             store::write_report(&report, &out)?;
             eprintln!(
-                "stillvalid: wrote {} ({} issues, {} PRs, all cant_tell until checks exist)",
+                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; all cant_tell until checks exist)",
                 out.display(),
                 report.summary.issues.open,
                 report.summary.pulls.open,
+                snapshot.references.len(),
             );
             Ok(())
         }
