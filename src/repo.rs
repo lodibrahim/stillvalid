@@ -2,6 +2,7 @@
 //! dev branch, or an existing checkout the user points at. Uses the system `git` (2.38+).
 
 use base64::Engine;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -115,6 +116,28 @@ impl Repo {
             path: dir.to_path_buf(),
             head_sha: head_sha.to_string(),
         })
+    }
+
+    /// Every file at `head_sha` and its blob SHA. Reads trees only, so a blobless clone
+    /// fetches nothing.
+    pub fn blob_shas(&self) -> Result<HashMap<String, String>, RepoError> {
+        let out = git(
+            Some(&self.path),
+            &["ls-tree", "-r", "-z", "--full-tree", &self.head_sha],
+            None,
+        )?;
+        // Each entry: `<mode> <type> <sha>\t<path>`.
+        Ok(out
+            .split('\0')
+            .filter_map(|entry| {
+                let (meta, path) = entry.split_once('\t')?;
+                let mut meta = meta.split(' ').skip(1);
+                if meta.next()? != "blob" {
+                    return None;
+                }
+                Some((path.to_string(), meta.next()?.to_string()))
+            })
+            .collect())
     }
 }
 
@@ -353,6 +376,29 @@ mod tests {
 
         let err = Repo::open_existing(&remote.work(), MISSING).unwrap_err();
         assert!(matches!(err, RepoError::MissingCommit { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn blob_shas_lists_files_at_head() {
+        let remote = Remote::new();
+        std::fs::create_dir_all(remote.work().join("src")).unwrap();
+        std::fs::write(remote.work().join("src").join("b c.rs"), "b").unwrap();
+        let first = remote.commit("a.txt", "one");
+        remote.commit("a.txt", "two");
+        let repo = Repo::open_existing(&remote.work(), &first).unwrap();
+        let blobs = repo.blob_shas().unwrap();
+        assert_eq!(blobs.len(), 2);
+        assert_eq!(
+            blobs["a.txt"],
+            sh(&remote.work(), &["rev-parse", &format!("{first}:a.txt")])
+        );
+        assert_eq!(
+            blobs["src/b c.rs"],
+            sh(
+                &remote.work(),
+                &["rev-parse", &format!("{first}:src/b c.rs")]
+            )
+        );
     }
 
     #[test]

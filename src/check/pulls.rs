@@ -203,6 +203,7 @@ mod tests {
             checks: Some(CheckState::Success),
             reviews: vec![],
             comments: vec![],
+            changed_files: None,
         }
     }
 

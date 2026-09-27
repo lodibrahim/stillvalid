@@ -360,6 +360,8 @@ pub struct PullActivity {
     pub reviews: Vec<Post>,
     /// Conversation comments (last `POSTS_PER_PULL`).
     pub comments: Vec<Post>,
+    /// Paths the PR changes; `None` when it changes more than `FILES_PER_PULL`.
+    pub changed_files: Option<Vec<String>>,
 }
 
 /// A review or comment on a PR.
@@ -403,9 +405,11 @@ pub enum Association {
 /// PRs per GraphQL page, and reviews/comments per PR (posts past the cap are not fetched).
 const PULLS_PER_PAGE: u32 = 50;
 const POSTS_PER_PULL: u32 = 20;
+/// Changed files per PR; PRs with more have no `changed_files`.
+const FILES_PER_PULL: u64 = 100;
 
 const PULL_ACTIVITY_QUERY: &str = r#"
-query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: Int!) {
+query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: Int!, $files: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: $pulls, after: $cursor) {
       pageInfo { hasNextPage endCursor }
@@ -417,6 +421,7 @@ query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: In
         commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
         reviews(last: $posts) { nodes { author { login } authorAssociation submittedAt } }
         comments(last: $posts) { nodes { author { login } authorAssociation createdAt } }
+        files(first: $files) { totalCount nodes { path } }
       }
     }
   }
@@ -451,6 +456,19 @@ struct PullActivityNode {
     commits: Nodes<CommitWrapper>,
     reviews: Nodes<PostNode>,
     comments: Nodes<PostNode>,
+    files: Option<Files>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Files {
+    total_count: u64,
+    nodes: Vec<FileNode>,
+}
+
+#[derive(Deserialize)]
+struct FileNode {
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -514,6 +532,10 @@ impl PullActivityNode {
             checks: head.and_then(|h| h.status_check_rollup).map(|r| r.state),
             reviews: into_posts(self.reviews.nodes),
             comments: into_posts(self.comments.nodes),
+            changed_files: self
+                .files
+                .filter(|f| f.total_count <= FILES_PER_PULL)
+                .map(|f| f.nodes.into_iter().map(|n| n.path).collect()),
         }
     }
 }
@@ -705,6 +727,7 @@ impl Fetcher {
                     "cursor": cursor,
                     "pulls": PULLS_PER_PAGE,
                     "posts": POSTS_PER_PULL,
+                    "files": FILES_PER_PULL,
                 },
             });
             let data: PullsData = self.gh.graphql(&payload).await?;
@@ -1243,7 +1266,8 @@ mod tests {
                 "comments": { "nodes": [
                     { "author": null, "authorAssociation": "FIRST_TIME_CONTRIBUTOR",
                       "createdAt": "2026-01-04T00:00:00Z" }
-                ] }
+                ] },
+                "files": { "totalCount": 2, "nodes": [{ "path": "src/a.rs" }, { "path": "README.md" }] }
             }]),
             Some("p1"),
         )
@@ -1256,7 +1280,8 @@ mod tests {
                 "commits": { "nodes": [{ "commit": {
                     "committedDate": "2026-02-01T00:00:00Z", "statusCheckRollup": null } }] },
                 "reviews": { "nodes": [] },
-                "comments": { "nodes": [] }
+                "comments": { "nodes": [] },
+                "files": { "totalCount": 101, "nodes": [{ "path": "src/a.rs" }] }
             }]),
             None,
         )
@@ -1288,12 +1313,14 @@ mod tests {
                     association: Association::Other,
                     at: "2026-01-04T00:00:00Z".parse().unwrap(),
                 }],
+                changed_files: Some(vec!["src/a.rs".into(), "README.md".into()]),
             }
         );
         let draft = &snap.pull_activity[&5];
         assert!(draft.draft && draft.author.is_none());
         assert_eq!(draft.mergeable, Mergeable::Unknown);
         assert_eq!(draft.checks, None);
+        assert_eq!(draft.changed_files, None);
     }
 
     #[tokio::test]
