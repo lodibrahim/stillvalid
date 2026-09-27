@@ -12,8 +12,8 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [x] CLI skeleton (`stillvalid scan`) that compiles
 - [ ] Claim `stillvalid` on crates.io and npm (placeholder 0.0.1)
 - [ ] Claim GitHub org `stillvalid`; check `stillvalid.dev`; quick trademark search
-- [ ] CI: `cargo fmt --check`, `cargo clippy`, `cargo test` on push
-- [ ] `cargo dist init` (macOS x86_64/aarch64, Linux x86_64, Windows x86_64; shell + PowerShell installers; Homebrew tap)
+- [x] CI: `cargo fmt --check`, `cargo clippy`, `cargo test` on push
+- [x] `cargo dist init` (macOS x86_64/aarch64, Linux x86_64, Windows x86_64; shell + PowerShell installers; Homebrew tap)
 
 ### Core
 - [x] Fetcher: open issues/PRs via REST (`octocrab`), paginated, `GITHUB_TOKEN` / `gh auth token`
