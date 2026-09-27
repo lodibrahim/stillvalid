@@ -4,9 +4,15 @@ use super::Finding;
 use crate::fetch::{Issue, Reference, Snapshot};
 use crate::store::{Confidence, Evidence, EvidenceType};
 
-/// An issue is likely fixed when a same-repo PR merged into the scanned branch after the issue
-/// was filed, or a commit referencing it is on the scanned branch, and the issue was not
-/// reopened afterwards. `high` if a qualifying PR says it fixes the issue, else `medium`.
+/// GitHub's closing keywords.
+const CLOSING_KEYWORDS: [&str; 9] = [
+    "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+];
+
+/// An issue is likely fixed when something that says it fixes the issue landed on the scanned
+/// branch and the issue was not reopened afterwards: a same-repo PR that will close it, merged
+/// into the branch after the issue was filed (`high`), or a commit on the branch whose message
+/// closes it (`medium`). Plain mentions don't count.
 pub fn likely_fixed(issue: &Issue, snapshot: &Snapshot) -> Option<Finding> {
     let refs = snapshot.references.get(&issue.number)?;
     let reopened_at = snapshot.reopened_at.get(&issue.number);
@@ -20,31 +26,31 @@ pub fn likely_fixed(issue: &Issue, snapshot: &Snapshot) -> Option<Finding> {
                 let Some(merged_at) = pr.merged_at else {
                     continue;
                 };
-                if pr.base_ref != *branch
+                if !pr.will_close
+                    || pr.base_ref != *branch
                     || merged_at <= issue.created_at
                     || reopened_at.is_some_and(|at| *at > merged_at)
                 {
                     continue;
                 }
-                let how = if pr.will_close {
-                    confidence = Confidence::High;
-                    "says it fixes this issue"
-                } else {
-                    "mentions this issue"
-                };
+                confidence = Confidence::High;
                 evidence.push(Evidence {
                     kind: EvidenceType::Pull,
                     reference: format!("#{}", pr.number),
                     note: format!(
-                        "Merged {} into {branch}; {how}",
+                        "Merged {} into {branch}; says it fixes this issue",
                         merged_at.format("%Y-%m-%d")
                     ),
                 });
             }
             Reference::Commit {
-                oid, referenced_at, ..
+                oid,
+                message,
+                referenced_at,
+                ..
             } => {
-                if !snapshot.commits_on_branch.contains(oid)
+                if !closes_issue(message, &snapshot.repo, issue.number)
+                    || !snapshot.commits_on_branch.contains(oid)
                     || reopened_at.is_some_and(|at| at > referenced_at)
                 {
                     continue;
@@ -52,7 +58,7 @@ pub fn likely_fixed(issue: &Issue, snapshot: &Snapshot) -> Option<Finding> {
                 evidence.push(Evidence {
                     kind: EvidenceType::Commit,
                     reference: oid.chars().take(7).collect(),
-                    note: format!("On {branch}; mentions this issue"),
+                    note: format!("On {branch}; says it fixes this issue"),
                 });
             }
         }
@@ -61,6 +67,40 @@ pub fn likely_fixed(issue: &Issue, snapshot: &Snapshot) -> Option<Finding> {
     (!evidence.is_empty()).then_some(Finding {
         confidence,
         evidence,
+    })
+}
+
+/// Whether a commit message closes issue `number` of `repo` with a closing keyword, as GitHub
+/// parses it: `Fixes #12`, `closes: owner/repo#12`, `Resolved https://github.com/owner/repo/issues/12`.
+/// Case-insensitive; the keyword must start a word and be followed by spaces or tabs.
+pub fn closes_issue(message: &str, repo: &str, number: u64) -> bool {
+    let text = message.to_ascii_lowercase();
+    let repo = repo.to_ascii_lowercase();
+    let prefixes = [
+        "#".to_string(),
+        format!("{repo}#"),
+        format!("https://github.com/{repo}/issues/"),
+    ];
+    text.char_indices().any(|(i, _)| {
+        let word_start = text[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        word_start
+            && CLOSING_KEYWORDS.iter().any(|kw| {
+                let Some(rest) = text[i..].strip_prefix(kw) else {
+                    return false;
+                };
+                let rest = rest.strip_prefix(':').unwrap_or(rest);
+                let target = rest.trim_start_matches([' ', '\t']);
+                target.len() < rest.len()
+                    && prefixes.iter().any(|p| {
+                        target.strip_prefix(p.as_str()).is_some_and(|n| {
+                            let end = n.find(|c: char| !c.is_ascii_digit()).unwrap_or(n.len());
+                            n[..end].parse() == Ok(number)
+                        })
+                    })
+            })
     })
 }
 
@@ -95,10 +135,11 @@ mod tests {
         })
     }
 
-    fn commit(oid: &str, referenced_at: &str) -> Reference {
+    fn commit(oid: &str, message: &str, referenced_at: &str) -> Reference {
         Reference::Commit {
             oid: oid.into(),
             url: format!("https://github.com/o/r/commit/{oid}"),
+            message: message.into(),
             referenced_at: ts(referenced_at),
         }
     }
@@ -133,12 +174,10 @@ mod tests {
     }
 
     #[test]
-    fn merged_pr_that_only_mentions_the_issue_is_medium() {
-        let f = likely_fixed(&issue(), &snapshot(vec![pr(1500, MERGED, "main", false)])).unwrap();
-        assert_eq!(f.confidence, Confidence::Medium);
+    fn merged_pr_that_only_mentions_the_issue_is_ignored() {
         assert_eq!(
-            f.evidence[0].note,
-            "Merged 2026-03-11 into main; mentions this issue"
+            likely_fixed(&issue(), &snapshot(vec![pr(1500, MERGED, "main", false)])),
+            None
         );
     }
 
@@ -178,9 +217,13 @@ mod tests {
     }
 
     #[test]
-    fn commit_on_branch_is_medium() {
+    fn closing_commit_on_branch_is_medium() {
         let oid = "0123456789abcdef";
-        let mut snap = snapshot(vec![commit(oid, "2026-02-01T00:00:00Z")]);
+        let mut snap = snapshot(vec![commit(
+            oid,
+            "Handle empty input\n\nFixes #7",
+            "2026-02-01T00:00:00Z",
+        )]);
         snap.commits_on_branch.insert(oid.into());
         let f = likely_fixed(&issue(), &snap).unwrap();
         assert_eq!(f.confidence, Confidence::Medium);
@@ -189,21 +232,33 @@ mod tests {
             [Evidence {
                 kind: EvidenceType::Commit,
                 reference: "0123456".into(),
-                note: "On main; mentions this issue".into(),
+                note: "On main; says it fixes this issue".into(),
             }]
         );
     }
 
     #[test]
+    fn commit_that_only_mentions_the_issue_is_ignored() {
+        let oid = "0123456789";
+        let mut snap = snapshot(vec![commit(oid, "See also #7", "2026-02-01T00:00:00Z")]);
+        snap.commits_on_branch.insert(oid.into());
+        assert_eq!(likely_fixed(&issue(), &snap), None);
+    }
+
+    #[test]
     fn commit_not_on_branch_is_ignored() {
-        let snap = snapshot(vec![commit("0123456789", "2026-02-01T00:00:00Z")]);
+        let snap = snapshot(vec![commit(
+            "0123456789",
+            "Fixes #7",
+            "2026-02-01T00:00:00Z",
+        )]);
         assert_eq!(likely_fixed(&issue(), &snap), None);
     }
 
     #[test]
     fn commit_referenced_before_reopen_is_ignored() {
         let oid = "0123456789";
-        let mut snap = snapshot(vec![commit(oid, "2026-02-01T00:00:00Z")]);
+        let mut snap = snapshot(vec![commit(oid, "Fixes #7", "2026-02-01T00:00:00Z")]);
         snap.commits_on_branch.insert(oid.into());
         snap.reopened_at.insert(7, ts("2026-03-01T00:00:00Z"));
         assert_eq!(likely_fixed(&issue(), &snap), None);
@@ -213,7 +268,7 @@ mod tests {
     fn all_qualifying_refs_are_evidence_and_highest_confidence_wins() {
         let oid = "fedcba9876543210";
         let mut snap = snapshot(vec![
-            commit(oid, "2026-02-01T00:00:00Z"),
+            commit(oid, "closes #7", "2026-02-01T00:00:00Z"),
             pr(1400, None, "main", true),
             pr(1500, MERGED, "main", true),
         ]);
@@ -222,6 +277,41 @@ mod tests {
         assert_eq!(f.confidence, Confidence::High);
         let refs: Vec<&str> = f.evidence.iter().map(|e| e.reference.as_str()).collect();
         assert_eq!(refs, ["fedcba9", "#1500"]);
+    }
+
+    #[test]
+    fn closing_keywords_match_like_github() {
+        let closes = |msg: &str| closes_issue(msg, "Owner/Repo", 12);
+        for yes in [
+            "Fixes #12",
+            "fix #12",
+            "FIXED #12.",
+            "closes: #12",
+            "Close #12, #13",
+            "Resolved\t#12",
+            "resolves owner/repo#12",
+            "Resolve https://github.com/OWNER/repo/issues/12",
+            "Refactor parser\n\nfixes #12",
+            // GitHub's parser accepts this too; not special-cased.
+            "This does not fix #12",
+        ] {
+            assert!(closes(yes), "{yes:?} should close #12");
+        }
+        for no in [
+            "See #12",
+            "hotfix #12",
+            "prefix #12",
+            "fixing #12",
+            "fixes #123",
+            "fixes #1",
+            "fixes #13, #12",
+            "fixes\n#12",
+            "fixes other/repo#12",
+            "fixes https://github.com/other/repo/issues/12",
+            "fixes#12",
+        ] {
+            assert!(!closes(no), "{no:?} should not close #12");
+        }
     }
 
     #[test]

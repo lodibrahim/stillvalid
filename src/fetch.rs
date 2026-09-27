@@ -66,6 +66,7 @@ pub enum Reference {
     Commit {
         oid: String,
         url: String,
+        message: String,
         /// When the commit last referenced the issue.
         referenced_at: DateTime<Utc>,
     },
@@ -109,7 +110,7 @@ query($owner: String!, $name: String!, $cursor: String, $issues: Int!, $events: 
             ... on ReferencedEvent {
               isCrossRepository
               createdAt
-              commit { oid url }
+              commit { oid url message }
             }
             ... on ReopenedEvent { createdAt }
           }
@@ -204,6 +205,7 @@ struct PullNode {
 struct CommitNode {
     oid: String,
     url: String,
+    message: String,
 }
 
 impl PullNode {
@@ -275,6 +277,7 @@ fn collect_references(events: Vec<TimelineItem>) -> (Vec<Reference>, Option<Date
             } => add(Reference::Commit {
                 oid: c.oid,
                 url: c.url,
+                message: c.message,
                 referenced_at: created_at,
             }),
             TimelineItem::ReopenedEvent { created_at } => {
@@ -633,10 +636,12 @@ mod tests {
             // Commit mention, twice: one entry with the later time. Deleted commit (null): ignored.
             { "__typename": "ReferencedEvent", "isCrossRepository": false,
               "createdAt": "2026-04-02T00:00:00Z",
-              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc" } },
+              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc",
+                          "message": "Fix empty input\n\nFixes #1" } },
             { "__typename": "ReferencedEvent", "isCrossRepository": false,
               "createdAt": "2026-04-01T00:00:00Z",
-              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc" } },
+              "commit": { "oid": "abc", "url": "https://github.com/o/r/commit/abc",
+                          "message": "Fix empty input\n\nFixes #1" } },
             { "__typename": "ReferencedEvent", "isCrossRepository": false,
               "createdAt": "2026-04-03T00:00:00Z", "commit": null },
             // Reopened twice: the latest counts.
@@ -662,6 +667,7 @@ mod tests {
                 Reference::Commit {
                     oid: "abc".into(),
                     url: "https://github.com/o/r/commit/abc".into(),
+                    message: "Fix empty input\n\nFixes #1".into(),
                     referenced_at: "2026-04-02T00:00:00Z".parse().unwrap(),
                 },
             ]
@@ -756,7 +762,8 @@ mod tests {
     fn commit_ref(oid: &str) -> serde_json::Value {
         json!({ "__typename": "ReferencedEvent", "isCrossRepository": false,
                 "createdAt": "2026-04-01T00:00:00Z",
-                "commit": { "oid": oid, "url": format!("https://github.com/o/r/commit/{oid}") } })
+                "commit": { "oid": oid, "url": format!("https://github.com/o/r/commit/{oid}"),
+                           "message": format!("Fixes #1 via {oid}") } })
     }
 
     #[tokio::test]

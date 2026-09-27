@@ -1,7 +1,7 @@
 //! stillvalid — is that issue still valid?
 //!
-//! Scanning fetches open issues and PRs and writes report.json. Issues referenced by a merged PR
-//! or a commit on the branch get `likely_fixed`; everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
+//! Scanning fetches open issues and PRs and writes report.json. Issues that a merged PR or a
+//! commit on the branch says it fixes get `likely_fixed`; everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
