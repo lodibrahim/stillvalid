@@ -122,8 +122,8 @@ pub fn extract(title: &str, body: &str) -> Vec<Reference> {
         let at = line_start + raw.len() - stripped.len();
         let next = lines.get(i + 1).map(|(_, l)| l.trim());
 
-        if let Some(consumed_next) = frame(stripped, next, at, &mut found) {
-            i += if consumed_next { 2 } else { 1 };
+        if let Some(used) = frame(stripped, next, at, &mut found) {
+            i += used;
             continue;
         }
         if panic(stripped, next, at, &mut found) {
@@ -142,64 +142,65 @@ pub fn extract(title: &str, body: &str) -> Vec<Reference> {
 
 #[derive(Default)]
 struct Found {
-    refs: Vec<(usize, usize, Reference)>,
+    refs: Vec<(usize, Reference)>,
 }
 
 impl Found {
     fn push(&mut self, offset: usize, r: Reference) {
-        let seq = self.refs.len();
-        self.refs.push((offset, seq, r));
+        self.refs.push((offset, r));
     }
 
     fn finish(mut self) -> Vec<Reference> {
-        self.refs.sort_by_key(|(offset, seq, _)| (*offset, *seq));
+        // Stable sort: references at the same offset keep push order.
+        self.refs.sort_by_key(|(offset, _)| *offset);
         let mut seen = HashSet::new();
         self.refs
             .into_iter()
-            .map(|(_, _, r)| r)
+            .map(|(_, r)| r)
             .filter(|r| seen.insert((r.kind, r.text.clone())))
             .collect()
     }
 }
 
-/// Match a stack frame starting at `line`. Returns `Some(true)` when the
-/// frame also used the next line (Rust and Go print location separately).
-fn frame(line: &str, next: Option<&str>, at: usize, found: &mut Found) -> Option<bool> {
+/// Match a stack frame starting at `line`. Returns how many lines it used:
+/// 2 when the location is on the next line (Rust and Go).
+fn frame(line: &str, next: Option<&str>, at: usize, found: &mut Found) -> Option<usize> {
     if let Some(c) = PYTHON_FRAME.captures(line) {
         let symbol = c.get(3).map(|m| m.as_str());
         push_frame(found, at, symbol, Some(&c[1]), c[2].parse().ok());
-        return Some(false);
+        return Some(1);
     }
     if let Some(c) = JAVA_FRAME.captures(line) {
         // Java frames name only the file, so the class decides what is noise.
         if !is_noise_symbol(&c[1]) {
             push_frame(found, at, Some(&c[1]), Some(&c[2]), c[3].parse().ok());
         }
-        return Some(false);
+        return Some(1);
     }
     if let Some(c) = AT_LOCATION.captures(line) {
         let symbol = c.get(1).map(|m| m.as_str());
         push_frame(found, at, symbol, Some(&c[2]), c[3].parse().ok());
-        return Some(false);
+        return Some(1);
     }
     if let Some(c) = RUST_FRAME.captures(line) {
         let symbol = strip_rust_hash(&c[1]);
-        if let Some(n) = next.and_then(|n| AT_LOCATION.captures(n)) {
-            if n.get(1).is_none() {
-                push_frame(found, at, Some(symbol), Some(&n[2]), n[3].parse().ok());
-                return Some(true);
-            }
+        let location = next
+            .and_then(|n| AT_LOCATION.captures(n))
+            .filter(|n| n.get(1).is_none());
+        if let Some(n) = location {
+            push_frame(found, at, Some(symbol), Some(&n[2]), n[3].parse().ok());
+            return Some(2);
         }
         if symbol.contains("::") {
             push_frame(found, at, Some(symbol), None, None);
-            return Some(false);
+            return Some(1);
         }
         return None;
     }
     if let Some(c) = GO_FUNC.captures(line) {
         if let Some(n) = next.and_then(|n| GO_LOCATION.captures(n)) {
             push_frame(found, at, Some(&c[1]), Some(&n[1]), n[2].parse().ok());
-            return Some(true);
+            return Some(2);
         }
     }
     None
@@ -213,19 +214,17 @@ fn push_frame(
     line: Option<u32>,
 ) {
     let path = path.map(normalize_path);
-    let path_noise = path.as_deref().is_some_and(is_noise_path);
-    let symbol = symbol.filter(|s| !path_noise && !is_noise_symbol(s));
-    let path = path.filter(|_| !path_noise);
-    if symbol.is_none() && path.is_none() {
+    if path.as_deref().is_some_and(is_noise_path) {
         return;
     }
+    let symbol = symbol.filter(|s| !is_noise_symbol(s));
 
     let location = path.as_deref().map(|p| path_text(p, line));
     let text = match (symbol, &location) {
         (Some(s), Some(l)) => format!("{s} at {l}"),
         (Some(s), None) => s.to_string(),
         (None, Some(l)) => l.clone(),
-        (None, None) => unreachable!(),
+        (None, None) => return,
     };
     found.push(
         at,
@@ -309,7 +308,7 @@ fn scan_prose(line: &str, line_start: usize, found: &mut Found) {
 /// Classify a token as a repo-relative-looking file path with optional line.
 fn as_path(token: &str) -> Option<(String, Option<u32>)> {
     let token = token.trim_end_matches(TRAILING_PUNCT);
-    if token.contains("::") {
+    if !token.contains('.') {
         return None;
     }
     let (path, line) = match LINE_SUFFIX.captures(token) {
@@ -330,7 +329,7 @@ fn as_path(token: &str) -> Option<(String, Option<u32>)> {
     }
     match dir {
         Some(d) => {
-            let first = d.split('/').next().unwrap_or("");
+            let first = d.split('/').next()?;
             if first.contains('.') && !first.starts_with('.') {
                 return None;
             }
