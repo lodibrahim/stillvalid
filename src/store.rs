@@ -1,5 +1,6 @@
 //! Store: the `report.json` contract (see schema/report.example.json).
 
+use crate::check;
 use crate::fetch::Snapshot;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -154,7 +155,8 @@ pub fn body_hash(body: Option<&str>) -> String {
     format!("sha256:{hex}")
 }
 
-/// Build a report from fetched data. No checks run yet, so every item is `cant_tell`.
+/// Build a report from fetched data. Issues get `likely_fixed` when [`check::likely_fixed`] finds
+/// evidence; every other item is `cant_tell`.
 pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Report {
     let unchecked = |kind, number, title: &str, url: &str, created_at, fingerprint| Item {
         kind,
@@ -171,7 +173,7 @@ pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Repo
     };
 
     let issues = snapshot.issues.iter().map(|i| {
-        unchecked(
+        let item = unchecked(
             Kind::Issue,
             i.number,
             &i.title,
@@ -182,7 +184,17 @@ pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Repo
                 related_files: Some(BTreeMap::new()),
                 head_sha: None,
             },
-        )
+        );
+        match check::likely_fixed(i, snapshot) {
+            Some(f) => Item {
+                verdict: Verdict::LikelyFixed,
+                confidence: f.confidence,
+                tier: Tier::Heuristic,
+                evidence: f.evidence,
+                ..item
+            },
+            None => item,
+        }
     });
     let pulls = snapshot.pulls.iter().map(|p| {
         unchecked(
@@ -299,6 +311,8 @@ mod tests {
                 },
             }],
             references: Default::default(),
+            reopened_at: Default::default(),
+            commits_on_branch: Default::default(),
         }
     }
 
@@ -320,6 +334,30 @@ mod tests {
         assert_eq!(r.summary.issues.cant_tell, 2);
         assert_eq!(r.summary.pulls.open, 1);
         assert_eq!(r.summary.pulls.cant_tell, 1);
+    }
+
+    #[test]
+    fn issue_referenced_by_merged_pr_is_likely_fixed() {
+        let mut snap = snapshot();
+        snap.references.insert(
+            1204,
+            vec![crate::fetch::Reference::Pull(crate::fetch::PullRef {
+                number: 2977,
+                url: "https://github.com/acme/rocketdb/pull/2977".into(),
+                merged_at: Some(ts("2026-03-11T00:00:00Z")),
+                base_ref: "main".into(),
+                will_close: true,
+            })],
+        );
+        let r = build_report(&snap, "basic", ts("2026-09-27T03:12:00Z"));
+        let item = &r.items[0];
+        assert_eq!(item.verdict, Verdict::LikelyFixed);
+        assert_eq!(item.confidence, Confidence::High);
+        assert_eq!(item.tier, Tier::Heuristic);
+        assert_eq!(item.evidence[0].reference, "#2977");
+        assert_eq!(r.items[1].verdict, Verdict::CantTell);
+        assert_eq!(r.summary.issues.likely_fixed, 1);
+        assert_eq!(r.summary.issues.cant_tell, 1);
     }
 
     #[test]
