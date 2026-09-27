@@ -12,6 +12,7 @@ rust-version = "1.85"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 octocrab = "0.54.2"

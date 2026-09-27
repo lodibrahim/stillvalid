@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-use stillvalid::{fetch, store};
+use std::time::Instant;
+use stillvalid::{fetch, repo, store};
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +47,10 @@ enum Command {
         /// Previous report.json for incremental runs
         #[arg(long)]
         previous: Option<PathBuf>,
+
+        /// Use this existing checkout instead of cloning (must contain the branch's head commit)
+        #[arg(long)]
+        repo_path: Option<PathBuf>,
     },
 }
 
@@ -70,8 +75,9 @@ async fn main() -> Result<()> {
             out,
             html,
             previous,
+            repo_path,
         } => {
-            fetch::split_repo(&repo)?;
+            let (owner, name) = fetch::split_repo(&repo)?;
             if html.is_some() || previous.is_some() {
                 eprintln!("stillvalid: --html and --previous are not implemented yet; ignoring");
             }
@@ -88,6 +94,25 @@ async fn main() -> Result<()> {
                 .fetch(&repo, branch.as_deref(), token.is_some())
                 .await
                 .with_context(|| format!("fetching {repo}"))?;
+
+            let started = Instant::now();
+            let local = match &repo_path {
+                Some(dir) => repo::Repo::open_existing(dir, &snapshot.head_sha),
+                None => repo::Repo::clone_or_update(
+                    &format!("https://github.com/{owner}/{name}.git"),
+                    &repo::cache_path(owner, name)?,
+                    &snapshot.branch,
+                    &snapshot.head_sha,
+                    token.as_deref(),
+                ),
+            }
+            .with_context(|| format!("preparing a local copy of {repo}"))?;
+            eprintln!(
+                "stillvalid: {} at {} ({:.1}s)",
+                local.path.display(),
+                local.head_sha,
+                started.elapsed().as_secs_f64(),
+            );
 
             let mode = mode.to_possible_value().expect("no skipped variants");
             let report =

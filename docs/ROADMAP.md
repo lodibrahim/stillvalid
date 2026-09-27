@@ -18,7 +18,7 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 ### Core
 - [x] Fetcher: open issues/PRs via REST (`octocrab`), paginated, `GITHUB_TOKEN` / `gh auth token`
 - [x] Fetcher: timeline cross-references (linked PRs/commits) via GraphQL
-- [ ] Clone/fetch target repo; dev-branch aware
+- [x] Clone/fetch target repo; dev-branch aware
 - [x] Indexer: extract paths, symbols, error strings, stack frames from issue text
 - [x] `report.json` write per [schema/report.example.json](../schema/report.example.json)
 - [ ] `report.json` read (for `--previous`)
