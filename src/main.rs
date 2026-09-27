@@ -1,9 +1,10 @@
 //! stillvalid — is that issue still valid?
 //!
 //! Scanning fetches open issues and PRs and writes report.json. Issues that a merged PR or a
-//! commit on the branch says it fixes, or whose named code is gone, get `likely_fixed`; open PRs
-//! get the activity rules (`abandoned`, `ready_unreviewed`) and a local `git merge-tree` against the branch
-//! (`conflicts`, `superseded`); everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
+//! commit on the branch says it fixes, or whose named code is gone, get `likely_fixed`; vague bug
+//! reports get `needs_info`; open PRs get the activity rules (`abandoned`, `ready_unreviewed`) and a
+//! local `git merge-tree` against the branch (`conflicts`, `superseded`); everything else is
+//! `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
@@ -11,7 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;
 use stillvalid::check::pulls::PullThresholds;
-use stillvalid::check::{code, merge};
+use stillvalid::check::{code, info, merge};
 use stillvalid::{fetch, incremental, repo, report, store};
 
 #[derive(Parser)]
@@ -113,7 +114,8 @@ async fn main() -> Result<()> {
                     "stillvalid: no GITHUB_TOKEN or `gh auth token`; using unauthenticated API (60 requests/hour) and skipping issue timelines and PR activity"
                 ),
             }
-            let snapshot = fetch::Fetcher::new(gh.build()?)
+            let fetcher = fetch::Fetcher::new(gh.build()?);
+            let snapshot = fetcher
                 .fetch(&repo, branch.as_deref(), token.is_some())
                 .await
                 .with_context(|| format!("fetching {repo}"))?;
@@ -168,6 +170,19 @@ async fn main() -> Result<()> {
                 );
             }
 
+            let now = Utc::now().trunc_subsecs(0);
+            // Needs fetched references, which need a token.
+            let info = match token {
+                Some(_) => info::check_all(&fetcher, &snapshot, &code.findings, now).await,
+                None => info::InfoChecks::default(),
+            };
+            if let Some((number, err)) = info.failed.first() {
+                eprintln!(
+                    "stillvalid: could not read comments on {} issues (first: #{number}: {err})",
+                    info.failed.len()
+                );
+            }
+
             let mode = mode.to_possible_value().expect("no skipped variants");
             let thresholds = PullThresholds {
                 abandoned_after_days,
@@ -176,10 +191,11 @@ async fn main() -> Result<()> {
             let mut report = store::build_report(
                 &snapshot,
                 mode.get_name(),
-                Utc::now().trunc_subsecs(0),
+                now,
                 &thresholds,
                 &checks.findings,
                 &code.findings,
+                &info.findings,
             );
             let blobs = local
                 .blob_shas()
@@ -200,13 +216,14 @@ async fn main() -> Result<()> {
             }
             store::write_report(&report, &out)?;
             eprintln!(
-                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed; {} PRs abandoned, {} ready_unreviewed, {} conflicts, {} superseded)",
+                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed, {} needs_info; {} PRs abandoned, {} ready_unreviewed, {} conflicts, {} superseded)",
                 out.display(),
                 report.summary.issues.open,
                 report.summary.pulls.open,
                 snapshot.references.len(),
                 report.summary.issues.open - report.summary.issues.cant_tell,
                 report.summary.issues.likely_fixed,
+                report.summary.issues.needs_info,
                 report.summary.pulls.abandoned,
                 report.summary.pulls.ready_unreviewed,
                 report.summary.pulls.conflicts,

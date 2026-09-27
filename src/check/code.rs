@@ -337,6 +337,7 @@ mod tests {
             created_at: "2026-01-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap(),
             body: Some(body.into()),
             pull_request: None,
+            ..Default::default()
         }
     }
 

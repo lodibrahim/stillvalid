@@ -18,7 +18,7 @@ pub enum FetchError {
 }
 
 /// An open issue. The REST issues endpoint also returns pull requests; those carry `pull_request`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Issue {
     pub number: u64,
     pub title: String,
@@ -27,6 +27,26 @@ pub struct Issue {
     pub body: Option<String>,
     #[serde(default)]
     pub pull_request: Option<serde_json::Value>,
+    #[serde(default)]
+    pub labels: Vec<Label>,
+    /// The issue's author; `None` for deleted accounts.
+    #[serde(default)]
+    pub user: Option<Login>,
+    #[serde(default)]
+    pub author_association: Association,
+    /// Number of comments.
+    #[serde(default)]
+    pub comments: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Label {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+struct IssueComment {
+    user: Option<Login>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -399,14 +419,16 @@ pub enum CheckState {
 }
 
 /// The poster's relationship to the repository. Owners, members, and collaborators have write
-/// access; everything else is `Other`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// access; contributors have had a commit merged; everything else is `Other`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Association {
     Owner,
     Member,
     Collaborator,
+    Contributor,
     #[serde(other)]
+    #[default]
     Other,
 }
 
@@ -484,9 +506,10 @@ struct Nodes<T> {
     nodes: Vec<T>,
 }
 
-#[derive(Deserialize)]
-struct Login {
-    login: String,
+/// A GitHub account.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Login {
+    pub login: String,
 }
 
 #[derive(Deserialize)]
@@ -750,6 +773,31 @@ impl Fetcher {
         }
     }
 
+    /// Whether `login` commented on issue `number` of `repo` (pages of comments until found).
+    pub async fn commented(
+        &self,
+        repo: &str,
+        number: u64,
+        login: &str,
+    ) -> Result<bool, FetchError> {
+        let (owner, name) = split_repo(repo)?;
+        let route = format!("/repos/{owner}/{name}/issues/{number}/comments");
+        let mut page: Page<IssueComment> = self.gh.get(route, Some(&[("per_page", "100")])).await?;
+        loop {
+            if page
+                .items
+                .iter()
+                .any(|c| c.user.as_ref().is_some_and(|u| u.login == login))
+            {
+                return Ok(true);
+            }
+            match self.gh.get_page(&page.next).await? {
+                Some(next) => page = next,
+                None => return Ok(false),
+            }
+        }
+    }
+
     /// GET every page of open items at `route`, following the `Link: rel="next"` header.
     async fn all_open<T: DeserializeOwned>(&self, route: &str) -> Result<Vec<T>, FetchError> {
         let params = [("state", "open"), ("per_page", "100")];
@@ -865,7 +913,10 @@ mod tests {
             .and(path("/repos/o/r/issues"))
             .and(query_param("page", "2"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                issue(3),
+                { "number": 3, "title": "Issue 3", "html_url": "https://github.com/o/r/issues/3",
+                  "created_at": "2026-01-01T00:00:00Z", "body": null,
+                  "labels": [{ "name": "bug" }], "user": { "login": "ann" },
+                  "author_association": "CONTRIBUTOR" },
                 { "number": 4, "title": "PR 4", "html_url": "https://github.com/o/r/pull/4",
                   "created_at": "2026-01-01T00:00:00Z", "body": null,
                   "pull_request": { "url": "https://api.github.com/repos/o/r/pulls/4" } }
@@ -902,8 +953,52 @@ mod tests {
         assert_eq!(snap.head_sha, "abc123");
         let issue_numbers: Vec<u64> = snap.issues.iter().map(|i| i.number).collect();
         assert_eq!(issue_numbers, [1, 2, 3]);
+        assert!(snap.issues[0].labels.is_empty() && snap.issues[0].user.is_none());
+        assert_eq!(snap.issues[0].author_association, Association::Other);
+        assert_eq!(snap.issues[2].labels[0].name, "bug");
+        assert_eq!(snap.issues[2].user.as_ref().unwrap().login, "ann");
+        assert_eq!(snap.issues[2].author_association, Association::Contributor);
         assert_eq!(snap.pulls.len(), 1);
         assert_eq!(snap.pulls[0].head.sha, "sha4");
+    }
+
+    #[tokio::test]
+    async fn commented_reads_every_page_of_comments() {
+        let server = MockServer::start().await;
+        let next = format!(
+            "<{}/repos/o/r/issues/7/comments?per_page=100&page=2>; rel=\"next\"",
+            server.uri()
+        );
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/issues/7/comments"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "user": { "login": "ann" } }
+            ])))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/issues/7/comments"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", next.as_str())
+                    .set_body_json(json!([{ "user": { "login": "bob" } }, { "user": null }])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/issues/8/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "user": { "login": "bob" } }
+            ])))
+            .mount(&server)
+            .await;
+
+        let f = fetcher(&server).await;
+        assert!(f.commented("o/r", 7, "ann").await.unwrap());
+        assert!(!f.commented("o/r", 8, "ann").await.unwrap());
+        assert!(f.commented("o/r", 9, "ann").await.is_err());
     }
 
     #[tokio::test]
