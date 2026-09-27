@@ -30,7 +30,7 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [ ] Missing repro/version/code match → `needs_info`
 - [ ] PR: `git merge-tree` conflicts → `conflicts`
 - [ ] PR: diff already on main → `superseded`
-- [ ] PR: inactivity + checks → `abandoned` / `ready_unreviewed`
+- [x] PR: inactivity + checks → `abandoned` / `ready_unreviewed`
 
 ### Tier 2 (`free-ai`)
 - [ ] GitHub Models client (OpenAI-compatible endpoint, `models: read`)

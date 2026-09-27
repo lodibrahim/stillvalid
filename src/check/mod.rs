@@ -3,6 +3,7 @@
 use crate::store::{Confidence, Evidence};
 
 pub mod issues;
+pub mod pulls;
 
 /// A verdict's confidence and the evidence behind it.
 #[derive(Debug, Clone, PartialEq)]

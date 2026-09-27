@@ -1,6 +1,7 @@
 //! Store: the `report.json` contract (see schema/report.example.json).
 
 use crate::check;
+use crate::check::pulls::{self, PullThresholds};
 use crate::fetch::Snapshot;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -156,8 +157,13 @@ pub fn body_hash(body: Option<&str>) -> String {
 }
 
 /// Build a report from fetched data. Issues get `likely_fixed` when [`check::issues::likely_fixed`] finds
-/// evidence; every other item is `cant_tell`.
-pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Report {
+/// evidence; PRs with fetched activity get the activity rules; every other item is `cant_tell`.
+pub fn build_report(
+    snapshot: &Snapshot,
+    mode: &str,
+    now: DateTime<Utc>,
+    thresholds: &PullThresholds,
+) -> Report {
     let unchecked = |kind, number, title: &str, url: &str, created_at, fingerprint| Item {
         kind,
         number,
@@ -197,7 +203,7 @@ pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Repo
         }
     });
     let pulls = snapshot.pulls.iter().map(|p| {
-        unchecked(
+        let mut item = unchecked(
             Kind::Pull,
             p.number,
             &p.title,
@@ -207,7 +213,15 @@ pub fn build_report(snapshot: &Snapshot, mode: &str, now: DateTime<Utc>) -> Repo
                 head_sha: Some(p.head.sha.clone()),
                 ..Fingerprint::default()
             },
-        )
+        );
+        let activity = snapshot.pull_activity.get(&p.number);
+        if let Some(f) = activity.and_then(|a| pulls::check(p, a, now, thresholds)) {
+            item.verdict = f.verdict;
+            item.confidence = f.confidence;
+            item.tier = Tier::Heuristic;
+            item.evidence = f.evidence;
+        }
+        item
     });
     let items: Vec<Item> = issues.chain(pulls).collect();
 
@@ -271,7 +285,7 @@ pub fn write_report(report: &Report, path: &Path) -> Result<(), StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::{Issue, Pull, PullHead};
+    use crate::fetch::{CheckState, Issue, Mergeable, Pull, PullActivity, PullHead};
     use serde_json::Value;
 
     fn ts(s: &str) -> DateTime<Utc> {
@@ -313,7 +327,17 @@ mod tests {
             references: Default::default(),
             reopened_at: Default::default(),
             commits_on_branch: Default::default(),
+            pull_activity: Default::default(),
         }
+    }
+
+    fn report(snapshot: &Snapshot) -> Report {
+        build_report(
+            snapshot,
+            "free-ai",
+            ts("2026-09-27T03:12:00Z"),
+            &PullThresholds::default(),
+        )
     }
 
     fn keys(v: &Value) -> Vec<String> {
@@ -324,7 +348,7 @@ mod tests {
 
     #[test]
     fn every_item_is_cant_tell_without_evidence() {
-        let r = build_report(&snapshot(), "basic", ts("2026-09-27T03:12:00Z"));
+        let r = report(&snapshot());
         assert_eq!(r.items.len(), 3);
         for item in &r.items {
             assert_eq!(item.verdict, Verdict::CantTell);
@@ -349,7 +373,12 @@ mod tests {
                 will_close: true,
             })],
         );
-        let r = build_report(&snap, "basic", ts("2026-09-27T03:12:00Z"));
+        let r = build_report(
+            &snap,
+            "basic",
+            ts("2026-09-27T03:12:00Z"),
+            &PullThresholds::default(),
+        );
         let item = &r.items[0];
         assert_eq!(item.verdict, Verdict::LikelyFixed);
         assert_eq!(item.confidence, Confidence::High);
@@ -358,6 +387,31 @@ mod tests {
         assert_eq!(r.items[1].verdict, Verdict::CantTell);
         assert_eq!(r.summary.issues.likely_fixed, 1);
         assert_eq!(r.summary.issues.cant_tell, 1);
+    }
+
+    #[test]
+    fn pull_with_activity_gets_a_heuristic_verdict() {
+        let mut snap = snapshot();
+        snap.pull_activity.insert(
+            2890,
+            PullActivity {
+                draft: false,
+                author: Some("alice".into()),
+                mergeable: Mergeable::Mergeable,
+                head_committed_at: None,
+                checks: Some(CheckState::Success),
+                reviews: vec![],
+                comments: vec![],
+            },
+        );
+        let r = report(&snap);
+        let pr = r.items.iter().find(|i| i.kind == Kind::Pull).unwrap();
+        assert_eq!(pr.verdict, Verdict::ReadyUnreviewed);
+        assert_eq!(pr.tier, Tier::Heuristic);
+        assert_eq!(pr.evidence[0].reference, "c0ffee1");
+        assert_eq!(r.summary.pulls.ready_unreviewed, 1);
+        assert_eq!(r.summary.pulls.cant_tell, 0);
+        assert_eq!(r.summary.issues.cant_tell, 2);
     }
 
     #[test]
@@ -374,12 +428,7 @@ mod tests {
     fn shape_matches_schema_example() {
         let example: Value =
             serde_json::from_str(include_str!("../schema/report.example.json")).unwrap();
-        let ours = serde_json::to_value(build_report(
-            &snapshot(),
-            "free-ai",
-            ts("2026-09-27T03:12:00Z"),
-        ))
-        .unwrap();
+        let ours = serde_json::to_value(report(&snapshot())).unwrap();
 
         assert_eq!(keys(&ours), keys(&example));
         assert_eq!(keys(&ours["tool"]), keys(&example["tool"]));
@@ -426,7 +475,7 @@ mod tests {
     fn write_report_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("report.json");
-        let r = build_report(&snapshot(), "basic", ts("2026-09-27T03:12:00Z"));
+        let r = report(&snapshot());
         write_report(&r, &path).unwrap();
         let back: Report = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(back, r);

@@ -1,13 +1,15 @@
 //! stillvalid — is that issue still valid?
 //!
 //! Scanning fetches open issues and PRs and writes report.json. Issues that a merged PR or a
-//! commit on the branch says it fixes get `likely_fixed`; everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
+//! commit on the branch says it fixes get `likely_fixed`; open PRs get the activity rules
+//! (`abandoned`, `ready_unreviewed`); everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;
+use stillvalid::check::pulls::PullThresholds;
 use stillvalid::{fetch, repo, store};
 
 #[derive(Parser)]
@@ -51,6 +53,14 @@ enum Command {
         /// Use this existing checkout instead of cloning (must contain the branch's head commit)
         #[arg(long)]
         repo_path: Option<PathBuf>,
+
+        /// Days without author activity before a failing or conflicting PR is `abandoned`
+        #[arg(long, default_value_t = PullThresholds::default().abandoned_after_days)]
+        abandoned_after_days: u32,
+
+        /// Days open without a review before a green PR is `ready_unreviewed`
+        #[arg(long, default_value_t = PullThresholds::default().unreviewed_after_days)]
+        unreviewed_after_days: u32,
     },
 }
 
@@ -76,6 +86,8 @@ async fn main() -> Result<()> {
             html,
             previous,
             repo_path,
+            abandoned_after_days,
+            unreviewed_after_days,
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
             if html.is_some() || previous.is_some() {
@@ -87,7 +99,7 @@ async fn main() -> Result<()> {
             match &token {
                 Some(token) => gh = gh.personal_token(token.clone()),
                 None => eprintln!(
-                    "stillvalid: no GITHUB_TOKEN or `gh auth token`; using unauthenticated API (60 requests/hour) and skipping issue timelines"
+                    "stillvalid: no GITHUB_TOKEN or `gh auth token`; using unauthenticated API (60 requests/hour) and skipping issue timelines and PR activity"
                 ),
             }
             let snapshot = fetch::Fetcher::new(gh.build()?)
@@ -115,17 +127,27 @@ async fn main() -> Result<()> {
             );
 
             let mode = mode.to_possible_value().expect("no skipped variants");
-            let report =
-                store::build_report(&snapshot, mode.get_name(), Utc::now().trunc_subsecs(0));
+            let thresholds = PullThresholds {
+                abandoned_after_days,
+                unreviewed_after_days,
+            };
+            let report = store::build_report(
+                &snapshot,
+                mode.get_name(),
+                Utc::now().trunc_subsecs(0),
+                &thresholds,
+            );
             store::write_report(&report, &out)?;
             eprintln!(
-                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed)",
+                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed; {} PRs abandoned, {} ready_unreviewed)",
                 out.display(),
                 report.summary.issues.open,
                 report.summary.pulls.open,
                 snapshot.references.len(),
                 report.summary.issues.open - report.summary.issues.cant_tell,
                 report.summary.issues.likely_fixed,
+                report.summary.pulls.abandoned,
+                report.summary.pulls.ready_unreviewed,
             );
             Ok(())
         }
