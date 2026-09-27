@@ -69,7 +69,8 @@ const NOISE_SYMBOLS: &[&str] = &[
 
 static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"https?://[^\s)\]>"'`]+"#).unwrap());
 static BLOB_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^https?://github\.com/[^/]+/[^/]+/blob/[^/]+/([^#?]+)(?:#L(\d+))?").unwrap()
+    Regex::new(r"^https?://github\.com/[^/]+/[^/]+/blob/[^/]+/([^#?]+)(?:\?[^#]*)?(?:#L(\d+))?")
+        .unwrap()
 });
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\w.~@+\-/\\:]+").unwrap());
 static LINE_SUFFIX: LazyLock<Regex> =
@@ -82,7 +83,8 @@ static CAMEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z][A-Z]").unwra
 static RUST_FRAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d+:\s+(?:0x[0-9a-fA-F]+ - )?(<.+>\S*|\S+)$").unwrap());
 static AT_LOCATION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^at\s+(?:async\s+)?(?:new\s+)?(?:(\S+)\s+\()?(\S+?):(\d+)(?::\d+)?\)?$").unwrap()
+    Regex::new(r"^at\s+(?:async\s+)?(?:new\s+)?(?:(\S+)\s+\()?(\S*?[./\\]\S*?):(\d+)(?::\d+)?\)?$")
+        .unwrap()
 });
 static JAVA_FRAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^at\s+([\w$.<>/]+)\(([\w$]+\.(?:java|kt|scala|groovy)):(\d+)\)").unwrap()
@@ -118,9 +120,9 @@ pub fn extract(title: &str, body: &str) -> Vec<Reference> {
     let mut i = 0;
     while i < lines.len() {
         let (line_start, raw) = lines[i];
-        let stripped = raw.trim_start().trim_start_matches('>').trim_start();
+        let stripped = unquote(raw);
         let at = line_start + raw.len() - stripped.len();
-        let next = lines.get(i + 1).map(|(_, l)| l.trim());
+        let next = lines.get(i + 1).map(|(_, l)| unquote(l).trim_end());
 
         if let Some(used) = frame(stripped, next, at, &mut found) {
             i += used;
@@ -138,6 +140,11 @@ pub fn extract(title: &str, body: &str) -> Vec<Reference> {
     }
 
     found.finish()
+}
+
+/// Drop indentation and a markdown `>` quote marker.
+fn unquote(line: &str) -> &str {
+    line.trim_start().trim_start_matches('>').trim_start()
 }
 
 #[derive(Default)]
@@ -463,6 +470,14 @@ stack backtrace:
              at ./src/main.rs:12:5
 ```";
 
+    const QUOTED_TRACES: &str = "\
+> thread 'main' panicked at src/a.rs:3:9:
+> index out of bounds
+>    0: app::compact
+>              at ./src/a.rs:88:14
+> main.compact(...)
+> \t/home/u/p/compact.go:88 +0x1d";
+
     const RUST_OLD_PANIC: &str = "\
 > thread 'main' panicked at 'called `Option::unwrap()` on a `None` value', src\\pool.rs:42:5
 > note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace";
@@ -505,7 +520,8 @@ java.lang.IllegalStateException: pool closed
     const BLOB_URL: &str = "The check is here: \
 https://github.com/o/r/blob/0a1b2c3/src/pool.rs#L10-L20 but see \
 https://github.com/o/r/issues/12 and https://docs.rs/foo/1.2.3/foo/index.html. \
-Repro: https://github.com/o/repro/blob/main/src/main.rs.";
+Repro: https://github.com/o/repro/blob/main/src/main.rs. \
+Docs: https://github.com/o/r/blob/main/README.md?plain=1#L5";
 
     const PROSE: &str = "Since v1.2.3 the loop in crates/core/src/lib.rs:88 never exits; \
 see also `src/compaction.rs` and `Pool::release`, e.g. in README.md.\r\n\
@@ -514,7 +530,8 @@ Error: connection refused";
     const NOISE: &str = "Thanks! Is this `yes` or `no`? Using version 1.2.3 on Ubuntu 22.04, \
 see https://example.com/page.html and https://github.com/o/r/pull/5. Works 50/50. \
 Branch https://github.com/o/r/tree/ag/freeze-2 at library/std/src/sys/fs/mod.rs:68, regex [^/]*\\\\.py[cod]. \
-Run `rg --files -g '*.rs'` with `--no-ignore`.";
+Run `rg --files -g '*.rs'` with `--no-ignore`.
+at 10:30 the server at localhost:8080 hung";
 
     /// (name, title, body, expected kind + text)
     type Case = (
@@ -555,6 +572,21 @@ Run `rg --files -g '*.rs'` with `--no-ignore`.";
                 &[
                     (Error, "called `Option::unwrap()` on a `None` value"),
                     (Path, "src/pool.rs:42"),
+                ],
+            ),
+            (
+                "quoted traces",
+                "",
+                QUOTED_TRACES,
+                &[
+                    (Error, "index out of bounds"),
+                    (Path, "src/a.rs:3"),
+                    (Frame, "app::compact at src/a.rs:88"),
+                    (Symbol, "app::compact"),
+                    (Path, "src/a.rs:88"),
+                    (Frame, "main.compact at /home/u/p/compact.go:88"),
+                    (Symbol, "main.compact"),
+                    (Path, "/home/u/p/compact.go:88"),
                 ],
             ),
             (
@@ -619,7 +651,11 @@ Run `rg --files -g '*.rs'` with `--no-ignore`.";
                 "github blob url",
                 "",
                 BLOB_URL,
-                &[(Path, "src/pool.rs:10"), (Path, "src/main.rs")],
+                &[
+                    (Path, "src/pool.rs:10"),
+                    (Path, "src/main.rs"),
+                    (Path, "README.md:5"),
+                ],
             ),
             (
                 "path and line in prose",
