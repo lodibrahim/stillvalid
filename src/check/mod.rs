@@ -4,6 +4,7 @@
 use crate::store::{Confidence, Evidence};
 
 pub mod code;
+pub mod info;
 pub mod issues;
 pub mod merge;
 pub mod pulls;

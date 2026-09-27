@@ -167,7 +167,8 @@ pub fn body_hash(body: Option<&str>) -> String {
 }
 
 /// Build a report from fetched data. Issues get `likely_fixed` when [`check::issues::likely_fixed`] finds
-/// evidence, else `code` (from [`check::code::check_all`]); PRs get `merges` (from
+/// evidence, else `code` (from [`check::code::check_all`]), else `needs_info` when
+/// [`check::info::needs_info`] applies; PRs get `merges` (from
 /// [`check::merge::check_all`]) and, with fetched activity, the activity rules; every other item
 /// is `cant_tell`.
 pub fn build_report(
@@ -205,9 +206,13 @@ pub fn build_report(
                 head_sha: None,
             },
         );
-        match check::issues::likely_fixed(i, snapshot).or_else(|| code.get(&i.number).cloned()) {
-            Some(f) => Item {
-                verdict: Verdict::LikelyFixed,
+        let found = check::issues::likely_fixed(i, snapshot)
+            .or_else(|| code.get(&i.number).cloned())
+            .map(|f| (Verdict::LikelyFixed, f))
+            .or_else(|| check::info::needs_info(i, snapshot, now).map(|f| (Verdict::NeedsInfo, f)));
+        match found {
+            Some((verdict, f)) => Item {
+                verdict,
                 confidence: f.confidence,
                 tier: Tier::Heuristic,
                 evidence: f.evidence,
@@ -358,6 +363,7 @@ mod tests {
             reopened_at: Default::default(),
             commits_on_branch: Default::default(),
             pull_activity: Default::default(),
+            issue_activity: Default::default(),
         }
     }
 
@@ -458,6 +464,47 @@ mod tests {
         assert_eq!(r.items[1].verdict, Verdict::LikelyFixed);
         assert_eq!(r.items[1].confidence, Confidence::Medium);
         assert_eq!(r.items[1].evidence[0].reference, "bbbbbbb");
+    }
+
+    #[test]
+    fn needs_info_applies_only_without_likely_fixed() {
+        let mut snap = snapshot();
+        for (number, title) in [
+            (1204, "Panic when compacting"),
+            (1300, "Compaction is broken"),
+        ] {
+            let issue = snap.issues.iter_mut().find(|i| i.number == number).unwrap();
+            issue.title = title.into();
+            snap.issue_activity.insert(
+                number,
+                crate::fetch::IssueActivity {
+                    labels: vec!["bug".into()],
+                    association: crate::fetch::Association::Other,
+                    reporter_commented: false,
+                },
+            );
+        }
+        let gone = check::Finding {
+            confidence: Confidence::Medium,
+            evidence: vec![Evidence {
+                kind: EvidenceType::Commit,
+                reference: "aaaaaaa".into(),
+                note: "Deleted src/pool.rs (named in the issue)".into(),
+            }],
+        };
+        let r = build_report(
+            &snap,
+            "basic",
+            ts("2026-09-27T03:12:00Z"),
+            &PullThresholds::default(),
+            &BTreeMap::new(),
+            &BTreeMap::from([(1204, gone)]),
+        );
+        assert_eq!(r.items[0].verdict, Verdict::LikelyFixed);
+        assert_eq!(r.items[1].verdict, Verdict::NeedsInfo);
+        assert_eq!(r.items[1].confidence, Confidence::Low);
+        assert_eq!(r.items[1].evidence[0].reference, "9f1c2ab");
+        assert_eq!(r.summary.issues.needs_info, 1);
     }
 
     #[test]

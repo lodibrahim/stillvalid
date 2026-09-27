@@ -1,9 +1,10 @@
 //! stillvalid — is that issue still valid?
 //!
 //! Scanning fetches open issues and PRs and writes report.json. Issues that a merged PR or a
-//! commit on the branch says it fixes, or whose named code is gone, get `likely_fixed`; open PRs
-//! get the activity rules (`abandoned`, `ready_unreviewed`) and a local `git merge-tree` against the branch
-//! (`conflicts`, `superseded`); everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
+//! commit on the branch says it fixes, or whose named code is gone, get `likely_fixed`; vague bug
+//! reports get `needs_info`; open PRs get the activity rules (`abandoned`, `ready_unreviewed`) and a
+//! local `git merge-tree` against the branch (`conflicts`, `superseded`); everything else is
+//! `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
@@ -200,13 +201,14 @@ async fn main() -> Result<()> {
             }
             store::write_report(&report, &out)?;
             eprintln!(
-                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed; {} PRs abandoned, {} ready_unreviewed, {} conflicts, {} superseded)",
+                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed, {} needs_info; {} PRs abandoned, {} ready_unreviewed, {} conflicts, {} superseded)",
                 out.display(),
                 report.summary.issues.open,
                 report.summary.pulls.open,
                 snapshot.references.len(),
                 report.summary.issues.open - report.summary.issues.cant_tell,
                 report.summary.issues.likely_fixed,
+                report.summary.issues.needs_info,
                 report.summary.pulls.abandoned,
                 report.summary.pulls.ready_unreviewed,
                 report.summary.pulls.conflicts,

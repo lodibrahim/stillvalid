@@ -69,6 +69,19 @@ pub struct Snapshot {
     /// Draft flag, checks, reviews, and comments for each open PR, keyed by PR number.
     /// Empty when fetched without GraphQL.
     pub pull_activity: BTreeMap<u64, PullActivity>,
+    /// Labels, author association, and whether the reporter commented, for each open issue.
+    /// Empty when fetched without GraphQL.
+    pub issue_activity: BTreeMap<u64, IssueActivity>,
+}
+
+/// What the `needs_info` rule needs about one open issue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IssueActivity {
+    pub labels: Vec<String>,
+    pub association: Association,
+    /// The issue's author commented on it (among the last `COMMENTS_PER_ISSUE`; also true when
+    /// there are more, since those weren't seen).
+    pub reporter_commented: bool,
 }
 
 /// Something in the same repository that mentions an issue.
@@ -96,17 +109,31 @@ pub struct PullRef {
     pub will_close: bool,
 }
 
-/// Issues per GraphQL page, and timeline events per issue (events past the cap are not fetched).
+/// References, reopen times, and activity per open issue, from [`Fetcher::references`].
+type IssueTimelines = (
+    BTreeMap<u64, Vec<Reference>>,
+    BTreeMap<u64, DateTime<Utc>>,
+    BTreeMap<u64, IssueActivity>,
+);
+
+/// Issues per GraphQL page, and timeline events, labels, and comments per issue (past the cap
+/// are not fetched).
 const ISSUES_PER_PAGE: u32 = 50;
 const EVENTS_PER_ISSUE: u32 = 100;
+const LABELS_PER_ISSUE: u32 = 20;
+const COMMENTS_PER_ISSUE: u32 = 20;
 
 const REFERENCES_QUERY: &str = r#"
-query($owner: String!, $name: String!, $cursor: String, $issues: Int!, $events: Int!) {
+query($owner: String!, $name: String!, $cursor: String, $issues: Int!, $events: Int!, $labels: Int!, $comments: Int!) {
   repository(owner: $owner, name: $name) {
     issues(states: OPEN, first: $issues, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number
+        author { login }
+        authorAssociation
+        labels(first: $labels) { nodes { name } }
+        comments(last: $comments) { totalCount nodes { author { login } } }
         timelineItems(first: $events, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT, REFERENCED_EVENT, REOPENED_EVENT]) {
           nodes {
             __typename
@@ -162,7 +189,58 @@ struct PageInfo {
 #[serde(rename_all = "camelCase")]
 struct RefsIssue {
     number: u64,
+    #[serde(default)]
+    author: Option<Login>,
+    #[serde(default = "other_association")]
+    author_association: Association,
+    #[serde(default)]
+    labels: Option<Nodes<LabelNode>>,
+    #[serde(default)]
+    comments: Option<Comments>,
     timeline_items: Timeline,
+}
+
+fn other_association() -> Association {
+    Association::Other
+}
+
+#[derive(Deserialize)]
+struct LabelNode {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Comments {
+    total_count: u32,
+    nodes: Vec<CommentNode>,
+}
+
+#[derive(Deserialize)]
+struct CommentNode {
+    author: Option<Login>,
+}
+
+impl RefsIssue {
+    fn activity(&self) -> IssueActivity {
+        let reporter = self.author.as_ref().map(|a| a.login.as_str());
+        let reporter_commented = self.comments.as_ref().is_some_and(|c| {
+            c.total_count as usize > c.nodes.len()
+                || c.nodes
+                    .iter()
+                    .any(|n| n.author.as_ref().map(|a| a.login.as_str()) == reporter)
+        });
+        IssueActivity {
+            labels: self
+                .labels
+                .iter()
+                .flat_map(|l| &l.nodes)
+                .map(|l| l.name.clone())
+                .collect(),
+            association: self.author_association,
+            reporter_commented,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -399,13 +477,14 @@ pub enum CheckState {
 }
 
 /// The poster's relationship to the repository. Owners, members, and collaborators have write
-/// access; everything else is `Other`.
+/// access; contributors have had a commit merged; everything else is `Other`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Association {
     Owner,
     Member,
     Collaborator,
+    Contributor,
     #[serde(other)]
     Other,
 }
@@ -616,7 +695,7 @@ impl Fetcher {
             .filter(|i| i.pull_request.is_none())
             .collect();
         let pulls = self.all_open::<Pull>(&format!("{base}/pulls")).await?;
-        let ((references, reopened_at), pull_activity) = if with_references {
+        let ((references, reopened_at, issue_activity), pull_activity) = if with_references {
             tokio::try_join!(
                 self.references(owner, name),
                 self.pull_activity(owner, name)
@@ -655,6 +734,7 @@ impl Fetcher {
             reopened_at,
             commits_on_branch,
             pull_activity,
+            issue_activity,
         })
     }
 
@@ -678,15 +758,12 @@ impl Fetcher {
     }
 
     /// Page through open issues' timelines via GraphQL: references per issue (issues with none
-    /// are omitted) and latest reopen time per issue.
-    async fn references(
-        &self,
-        owner: &str,
-        name: &str,
-    ) -> Result<(BTreeMap<u64, Vec<Reference>>, BTreeMap<u64, DateTime<Utc>>), FetchError> {
+    /// are omitted), latest reopen time per issue, and each issue's activity.
+    async fn references(&self, owner: &str, name: &str) -> Result<IssueTimelines, FetchError> {
         let repo = format!("{owner}/{name}");
         let mut out = BTreeMap::new();
         let mut reopened = BTreeMap::new();
+        let mut activity = BTreeMap::new();
         let mut cursor: Option<String> = None;
         loop {
             let payload = json!({
@@ -697,11 +774,14 @@ impl Fetcher {
                     "cursor": cursor,
                     "issues": ISSUES_PER_PAGE,
                     "events": EVENTS_PER_ISSUE,
+                    "labels": LABELS_PER_ISSUE,
+                    "comments": COMMENTS_PER_ISSUE,
                 },
             });
             let data: RefsData = self.gh.graphql(&payload).await?;
             let issues = data.repository.issues;
             for issue in issues.nodes {
+                activity.insert(issue.number, issue.activity());
                 let (refs, reopened_at) =
                     collect_references(issue.timeline_items.nodes, &repo, issue.number);
                 if !refs.is_empty() {
@@ -713,7 +793,7 @@ impl Fetcher {
             }
             match issues.page_info.end_cursor {
                 Some(next) if issues.page_info.has_next_page => cursor = Some(next),
-                _ => return Ok((out, reopened)),
+                _ => return Ok((out, reopened, activity)),
             }
         }
     }
@@ -1039,7 +1119,12 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(refs_page(
                 json!([
                     { "number": 1, "timelineItems": { "nodes": [cross_ref(10, true)] } },
-                    { "number": 2, "timelineItems": { "nodes": [] } }
+                    { "number": 2, "timelineItems": { "nodes": [] },
+                      "author": { "login": "ann" }, "authorAssociation": "NONE",
+                      "labels": { "nodes": [{ "name": "bug" }] },
+                      "comments": { "totalCount": 2, "nodes": [
+                          { "author": { "login": "bob" } }, { "author": null }
+                      ] } }
                 ]),
                 Some("c1"),
             )))
@@ -1051,7 +1136,9 @@ mod tests {
                 json!({ "variables": { "cursor": "c1" } }),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(refs_page(
-                json!([{ "number": 3, "timelineItems": { "nodes": [cross_ref(11, false)] } }]),
+                json!([{ "number": 3, "timelineItems": { "nodes": [cross_ref(11, false)] },
+                         "author": { "login": "ann" }, "authorAssociation": "CONTRIBUTOR",
+                         "comments": { "totalCount": 1, "nodes": [{ "author": { "login": "ann" } }] } }]),
                 None,
             )))
             .mount(&server)
@@ -1073,6 +1160,31 @@ mod tests {
         assert!(
             matches!(&snap.references[&3][0], Reference::Pull(p) if p.number == 11 && !p.will_close)
         );
+        assert_eq!(
+            snap.issue_activity[&2],
+            IssueActivity {
+                labels: vec!["bug".into()],
+                association: Association::Other,
+                reporter_commented: false,
+            }
+        );
+        assert_eq!(
+            snap.issue_activity[&3].association,
+            Association::Contributor
+        );
+        assert!(snap.issue_activity[&3].reporter_commented);
+        assert!(snap.issue_activity[&1].labels.is_empty());
+    }
+
+    #[test]
+    fn reporter_counts_as_commented_when_comments_were_cut_off() {
+        let issue: RefsIssue = serde_json::from_value(json!({
+            "number": 1, "timelineItems": { "nodes": [] },
+            "author": { "login": "ann" },
+            "comments": { "totalCount": 21, "nodes": [{ "author": { "login": "bob" } }] }
+        }))
+        .unwrap();
+        assert!(issue.activity().reporter_commented);
     }
 
     /// Server with branch `main` and no open issues or PRs.

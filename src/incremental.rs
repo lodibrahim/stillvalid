@@ -200,6 +200,7 @@ mod tests {
                 },
             )]
             .into(),
+            issue_activity: Default::default(),
         }
     }
 
