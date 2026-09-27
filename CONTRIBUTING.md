@@ -1,6 +1,6 @@
 # Contributing to stillvalid
 
-Thanks for helping. Start with [CLAUDE.md](CLAUDE.md) for context and rules, and [docs/ROADMAP.md](docs/ROADMAP.md) for open work.
+Thanks for helping. Start with [AGENTS.md](AGENTS.md) for context and rules, and [docs/ROADMAP.md](docs/ROADMAP.md) for open work.
 
 ## Build and test
 
@@ -20,7 +20,7 @@ cargo deny check   # optional locally; CI runs it
 
 ## Rules that are not up for debate
 
-See "Non-negotiables" in [CLAUDE.md](CLAUDE.md): every verdict carries evidence, and stillvalid is read-only by default.
+See "Non-negotiables" in [AGENTS.md](AGENTS.md): every verdict carries evidence, and stillvalid is read-only by default.
 
 ## Security
 
