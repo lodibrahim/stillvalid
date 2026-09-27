@@ -30,14 +30,7 @@ pub fn check_all(
         .iter()
         .filter(|p| p.base.name == snapshot.branch)
         .collect();
-    // actions/checkout persists its own github.com auth header; a second one gets requests
-    // rejected, so use the repo's when it has one.
-    let own_header = [
-        "config",
-        "--get-all",
-        "http.https://github.com/.extraheader",
-    ];
-    let token = token.filter(|_| repo.git(&own_header, None).is_err());
+    let token = repo.fetch_token(token);
     let heads: Vec<&str> = pulls.iter().map(|p| p.head.sha.as_str()).collect();
     repo.fetch_commits(&heads, token);
 

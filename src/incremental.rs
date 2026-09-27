@@ -216,6 +216,7 @@ mod tests {
             ts(at),
             &PullThresholds::default(),
             &Default::default(),
+            &Default::default(),
         );
         fill_fingerprints(&mut r, snapshot, blobs);
         r

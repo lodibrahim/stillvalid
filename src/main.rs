@@ -1,8 +1,8 @@
 //! stillvalid — is that issue still valid?
 //!
 //! Scanning fetches open issues and PRs and writes report.json. Issues that a merged PR or a
-//! commit on the branch says it fixes get `likely_fixed`; open PRs get the activity rules
-//! (`abandoned`, `ready_unreviewed`) and a local `git merge-tree` against the branch
+//! commit on the branch says it fixes, or whose named code is gone, get `likely_fixed`; open PRs
+//! get the activity rules (`abandoned`, `ready_unreviewed`) and a local `git merge-tree` against the branch
 //! (`conflicts`, `superseded`); everything else is `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
@@ -10,8 +10,8 @@ use chrono::{SubsecRound, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;
-use stillvalid::check::merge;
 use stillvalid::check::pulls::PullThresholds;
+use stillvalid::check::{code, merge};
 use stillvalid::{fetch, incremental, repo, store};
 
 #[derive(Parser)]
@@ -158,6 +158,19 @@ async fn main() -> Result<()> {
                 );
             }
 
+            let started = Instant::now();
+            let code = code::check_all(&local, &snapshot, token.as_deref());
+            eprintln!(
+                "stillvalid: checked the code issues name ({:.1}s)",
+                started.elapsed().as_secs_f64(),
+            );
+            if let Some((number, err)) = code.failed.first() {
+                eprintln!(
+                    "stillvalid: could not code-check {} issues (first: #{number}: {err})",
+                    code.failed.len()
+                );
+            }
+
             let mode = mode.to_possible_value().expect("no skipped variants");
             let thresholds = PullThresholds {
                 abandoned_after_days,
@@ -169,6 +182,7 @@ async fn main() -> Result<()> {
                 Utc::now().trunc_subsecs(0),
                 &thresholds,
                 &checks.findings,
+                &code.findings,
             );
             let blobs = local
                 .blob_shas()

@@ -26,7 +26,7 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 
 ### Tier 1 heuristics (`basic`)
 - [x] Issue referenced by merged PR / commit on dev branch → `likely_fixed`
-- [ ] Referenced files/symbols deleted or rewritten → `likely_fixed` (medium)
+- [x] Referenced files/symbols deleted or rewritten → `likely_fixed` (medium)
 - [ ] Missing repro/version/code match → `needs_info`
 - [x] PR: `git merge-tree` conflicts → `conflicts`
 - [x] PR: diff already on main → `superseded`

@@ -2,6 +2,7 @@
 //! dev branch, or an existing checkout the user points at. Uses the system `git` (2.38+).
 
 use base64::Engine;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -187,6 +188,170 @@ impl Repo {
             tree: fields.next().unwrap_or_default().to_string(),
             conflicts: fields.map(str::to_string).collect(),
         })
+    }
+
+    /// The last first-parent commit before `head_sha` committed at or before `at`.
+    pub fn commit_before(&self, at: DateTime<Utc>) -> Result<Option<String>, RepoError> {
+        let before = format!("--before={}", at.to_rfc3339());
+        let out = self.git(
+            &["rev-list", "-1", "--first-parent", &before, &self.head_sha],
+            None,
+        )?;
+        Ok((!out.is_empty()).then_some(out))
+    }
+
+    /// Every file path at `rev`. Reads trees only.
+    pub fn files_at(&self, rev: &str) -> Result<Vec<String>, RepoError> {
+        let out = self.git(
+            &["ls-tree", "-r", "-z", "--name-only", "--full-tree", rev],
+            None,
+        )?;
+        Ok(out
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Whether `path` is a file at `rev`. Reads trees only, so a blobless clone fetches nothing.
+    pub fn is_file(&self, rev: &str, path: &str) -> bool {
+        // `<mode> <type> <sha>\t<path>`, or nothing.
+        self.git(&["ls-tree", "--full-tree", rev, "--", path], None)
+            .is_ok_and(|out| out.split(' ').nth(1) == Some("blob"))
+    }
+
+    /// The last first-parent commit in `from..head_sha` that removed `path`, and where it moved
+    /// the file if git's rename detection saw a move.
+    pub fn removal(
+        &self,
+        from: &str,
+        path: &str,
+        token: Option<&str>,
+    ) -> Result<Option<(String, Option<String>)>, RepoError> {
+        let range = format!("{from}..{}", self.head_sha);
+        let commit = self.git(
+            &[
+                "log",
+                "--first-parent",
+                "--diff-filter=D",
+                "--no-renames",
+                "--format=%H",
+                "-1",
+                &range,
+                "--",
+                path,
+            ],
+            None,
+        )?;
+        if commit.is_empty() {
+            return Ok(None);
+        }
+        let parent = format!("{commit}^");
+        let out = self.git(
+            &[
+                "diff",
+                "-z",
+                "-M",
+                "--name-status",
+                "--diff-filter=R",
+                &parent,
+                &commit,
+            ],
+            token,
+        )?;
+        // Each rename: `R<score>\0<old>\0<new>\0`.
+        let fields: Vec<&str> = out.split('\0').collect();
+        let moved_to = fields
+            .chunks(3)
+            .find(|c| c.len() == 3 && c[1] == path)
+            .map(|c| c[2].to_string());
+        Ok(Some((commit, moved_to)))
+    }
+
+    /// Lines in `old` at `from`, and how many of them are deleted or changed in `new` at
+    /// `head_sha`.
+    pub fn lines_changed(
+        &self,
+        from: &str,
+        old: &str,
+        new: &str,
+        token: Option<&str>,
+    ) -> Result<(usize, usize), RepoError> {
+        let old = format!("{from}:{old}");
+        let text = self.git(&["cat-file", "-p", &old], token)?;
+        let new = format!("{}:{new}", self.head_sha);
+        let numstat = self.git(&["diff", "--numstat", &old, &new], token)?;
+        // `<added>\t<deleted>\t<path>`; binary files show `-`.
+        let deleted = numstat
+            .split('\t')
+            .nth(1)
+            .and_then(|d| d.parse().ok())
+            .unwrap_or(0);
+        Ok((text.lines().count(), deleted))
+    }
+
+    /// The first `path` and line at `rev` containing `needle` as a fixed string (as a whole
+    /// word with `word`), skipping binary files.
+    pub fn grep(
+        &self,
+        rev: &str,
+        needle: &str,
+        word: bool,
+        token: Option<&str>,
+    ) -> Result<Option<(String, u32)>, RepoError> {
+        let mut args = vec!["grep", "-z", "-n", "-I", "-F", "-e", needle];
+        if word {
+            args.push("-w");
+        }
+        args.extend([rev, "--"]);
+        // Exit 1 means no match. Each match: `<rev>:<path>\0<line>\0<text>\n`.
+        let out = git_output(Some(&self.path), &args, token, &[0, 1])?;
+        let mut fields = out.split('\0');
+        let path = fields
+            .next()
+            .and_then(|p| p.strip_prefix(&format!("{rev}:")));
+        let line = fields.next().and_then(|l| l.parse().ok());
+        Ok(path.zip(line).map(|(p, l)| (p.to_string(), l)))
+    }
+
+    /// The last first-parent commit in `from..head_sha` whose diff adds or removes a line
+    /// containing `needle` (as a whole word with `word`, like [`Repo::grep`]). When `needle` is
+    /// in `from` but not at `head_sha`, that is the commit that removed its last occurrence.
+    pub fn last_change_of(
+        &self,
+        from: &str,
+        needle: &str,
+        word: bool,
+        token: Option<&str>,
+    ) -> Result<Option<String>, RepoError> {
+        let range = format!("{from}..{}", self.head_sha);
+        let pickaxe = if word {
+            // Symbols are identifier characters only, so they need no regex escaping.
+            format!("-G(^|[^A-Za-z0-9_]){needle}([^A-Za-z0-9_]|$)")
+        } else {
+            format!("-S{needle}")
+        };
+        let args = [
+            "log",
+            "--first-parent",
+            "--format=%H",
+            "-1",
+            &pickaxe,
+            &range,
+        ];
+        let out = self.git(&args, token)?;
+        Ok((!out.is_empty()).then_some(out))
+    }
+
+    /// `token`, unless the repo already sends its own github.com auth header: actions/checkout
+    /// persists one, and a second one gets requests rejected.
+    pub fn fetch_token<'a>(&self, token: Option<&'a str>) -> Option<&'a str> {
+        let own_header = [
+            "config",
+            "--get-all",
+            "http.https://github.com/.extraheader",
+        ];
+        token.filter(|_| self.git(&own_header, None).is_err())
     }
 }
 
