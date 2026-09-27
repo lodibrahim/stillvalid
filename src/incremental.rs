@@ -150,7 +150,7 @@ pub fn reuse(report: &mut Report, previous: &Report) -> Counts {
 mod tests {
     use super::*;
     use crate::check::pulls::PullThresholds;
-    use crate::fetch::{Issue, Mergeable, Pull, PullActivity, PullHead};
+    use crate::fetch::{Issue, Mergeable, Pull, PullActivity, PullBase, PullHead};
     use crate::store::{Confidence, Evidence, EvidenceType, Fingerprint};
     use chrono::{DateTime, Utc};
 
@@ -178,6 +178,9 @@ mod tests {
                 created_at: ts("2026-01-15T09:30:00Z"),
                 head: PullHead {
                     sha: "c0ffee1".into(),
+                },
+                base: PullBase {
+                    name: "main".into(),
                 },
             }],
             references: Default::default(),
@@ -207,7 +210,13 @@ mod tests {
     }
 
     fn scan(snapshot: &Snapshot, blobs: &HashMap<String, String>, at: &str) -> Report {
-        let mut r = store::build_report(snapshot, "basic", ts(at), &PullThresholds::default());
+        let mut r = store::build_report(
+            snapshot,
+            "basic",
+            ts(at),
+            &PullThresholds::default(),
+            &Default::default(),
+        );
         fill_fingerprints(&mut r, snapshot, blobs);
         r
     }

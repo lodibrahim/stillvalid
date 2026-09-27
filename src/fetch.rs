@@ -36,11 +36,19 @@ pub struct Pull {
     pub html_url: String,
     pub created_at: DateTime<Utc>,
     pub head: PullHead,
+    pub base: PullBase,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PullHead {
     pub sha: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PullBase {
+    /// Branch the PR merges into.
+    #[serde(rename = "ref")]
+    pub name: String,
 }
 
 /// Everything fetched for one scan.
@@ -772,7 +780,8 @@ mod tests {
             "title": format!("PR {n}"),
             "html_url": format!("https://github.com/o/r/pull/{n}"),
             "created_at": "2026-02-01T00:00:00Z",
-            "head": { "sha": format!("sha{n}") }
+            "head": { "sha": format!("sha{n}") },
+            "base": { "ref": "main" }
         })
     }
 

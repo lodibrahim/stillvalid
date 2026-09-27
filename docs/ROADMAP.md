@@ -28,8 +28,8 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [x] Issue referenced by merged PR / commit on dev branch → `likely_fixed`
 - [ ] Referenced files/symbols deleted or rewritten → `likely_fixed` (medium)
 - [ ] Missing repro/version/code match → `needs_info`
-- [ ] PR: `git merge-tree` conflicts → `conflicts`
-- [ ] PR: diff already on main → `superseded`
+- [x] PR: `git merge-tree` conflicts → `conflicts`
+- [x] PR: diff already on main → `superseded`
 - [x] PR: inactivity + checks → `abandoned` / `ready_unreviewed`
 
 ### Tier 2 (`free-ai`)

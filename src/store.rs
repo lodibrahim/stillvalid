@@ -167,12 +167,14 @@ pub fn body_hash(body: Option<&str>) -> String {
 }
 
 /// Build a report from fetched data. Issues get `likely_fixed` when [`check::issues::likely_fixed`] finds
-/// evidence; PRs with fetched activity get the activity rules; every other item is `cant_tell`.
+/// evidence; PRs get `merges` (from [`check::merge::check_all`]) and, with fetched activity, the
+/// activity rules; every other item is `cant_tell`.
 pub fn build_report(
     snapshot: &Snapshot,
     mode: &str,
     now: DateTime<Utc>,
     thresholds: &PullThresholds,
+    merges: &BTreeMap<u64, pulls::Finding>,
 ) -> Report {
     let unchecked = |kind, number, title: &str, url: &str, created_at, fingerprint| Item {
         kind,
@@ -225,7 +227,8 @@ pub fn build_report(
             },
         );
         let activity = snapshot.pull_activity.get(&p.number);
-        if let Some(f) = activity.and_then(|a| pulls::check(p, a, now, thresholds)) {
+        let found = pulls::verdict(p, activity, merges.get(&p.number), now, thresholds);
+        if let Some(f) = found {
             item.verdict = f.verdict;
             item.confidence = f.confidence;
             item.tier = Tier::Heuristic;
@@ -307,7 +310,7 @@ pub fn read_report(path: &Path) -> Result<Report, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::{CheckState, Issue, Mergeable, Pull, PullActivity, PullHead};
+    use crate::fetch::{CheckState, Issue, Mergeable, Pull, PullActivity, PullBase, PullHead};
     use serde_json::Value;
 
     fn ts(s: &str) -> DateTime<Utc> {
@@ -345,6 +348,9 @@ mod tests {
                 head: PullHead {
                     sha: "c0ffee1".into(),
                 },
+                base: PullBase {
+                    name: "main".into(),
+                },
             }],
             references: Default::default(),
             reopened_at: Default::default(),
@@ -359,6 +365,7 @@ mod tests {
             "free-ai",
             ts("2026-09-27T03:12:00Z"),
             &PullThresholds::default(),
+            &BTreeMap::new(),
         )
     }
 
@@ -400,6 +407,7 @@ mod tests {
             "basic",
             ts("2026-09-27T03:12:00Z"),
             &PullThresholds::default(),
+            &BTreeMap::new(),
         );
         let item = &r.items[0];
         assert_eq!(item.verdict, Verdict::LikelyFixed);
@@ -435,6 +443,76 @@ mod tests {
         assert_eq!(r.summary.pulls.ready_unreviewed, 1);
         assert_eq!(r.summary.pulls.cant_tell, 0);
         assert_eq!(r.summary.issues.cant_tell, 2);
+    }
+
+    #[test]
+    fn merge_verdicts_combine_with_activity_rules() {
+        let merge = |verdict, reference: &str| pulls::Finding {
+            verdict,
+            confidence: Confidence::High,
+            evidence: vec![Evidence {
+                kind: EvidenceType::Code,
+                reference: reference.into(),
+                note: "n".into(),
+            }],
+        };
+        // Idle for a year; checks pending, so only a conflict can make it abandoned.
+        let idle = PullActivity {
+            draft: false,
+            author: Some("alice".into()),
+            mergeable: Mergeable::Unknown,
+            head_committed_at: None,
+            checks: Some(CheckState::Pending),
+            reviews: vec![],
+            comments: vec![],
+            changed_files: None,
+        };
+        // Pushed last month; checks passing.
+        let green = PullActivity {
+            head_committed_at: Some(ts("2027-05-01T00:00:00Z")),
+            checks: Some(CheckState::Success),
+            ..idle.clone()
+        };
+        let pr = |activity: Option<&PullActivity>, merges: &[(Verdict, &str)]| {
+            let mut snap = snapshot();
+            if let Some(a) = activity {
+                snap.pull_activity.insert(2890, a.clone());
+            }
+            let merges = merges.iter().map(|&(v, r)| (2890, merge(v, r))).collect();
+            let r = build_report(
+                &snap,
+                "basic",
+                ts("2027-06-01T00:00:00Z"),
+                &PullThresholds::default(),
+                &merges,
+            );
+            r.items.into_iter().find(|i| i.kind == Kind::Pull).unwrap()
+        };
+        let refs = |item: &Item| -> Vec<String> {
+            item.evidence.iter().map(|e| e.reference.clone()).collect()
+        };
+
+        // superseded beats abandoned.
+        let item = pr(Some(&idle), &[(Verdict::Superseded, "abc1234")]);
+        assert_eq!(item.verdict, Verdict::Superseded);
+
+        // A local conflict makes an idle PR abandoned, with the conflict files appended.
+        let item = pr(Some(&idle), &[(Verdict::Conflicts, "a.rs")]);
+        assert_eq!(item.verdict, Verdict::Abandoned);
+        assert!(item.evidence[0].note.ends_with("; merge conflicts"));
+        assert_eq!(refs(&item), ["c0ffee1", "a.rs"]);
+
+        // conflicts beats ready_unreviewed, and stands alone without activity.
+        let item = pr(Some(&green), &[(Verdict::Conflicts, "a.rs")]);
+        assert_eq!(item.verdict, Verdict::Conflicts);
+        assert_eq!(refs(&item), ["a.rs"]);
+        let item = pr(None, &[(Verdict::Conflicts, "a.rs")]);
+        assert_eq!(item.verdict, Verdict::Conflicts);
+        assert_eq!(item.tier, Tier::Heuristic);
+
+        // Without a merge verdict the activity rules apply as before.
+        assert_eq!(pr(Some(&green), &[]).verdict, Verdict::ReadyUnreviewed);
+        assert_eq!(pr(Some(&idle), &[]).verdict, Verdict::CantTell);
     }
 
     #[test]
