@@ -170,6 +170,7 @@ mod tests {
                 created_at: ts("2024-09-02T10:00:00Z"),
                 body: Some("at src/compaction.rs:88 and docs/gone.md".into()),
                 pull_request: None,
+                ..Default::default()
             }],
             pulls: vec![Pull {
                 number: 2890,
@@ -200,7 +201,6 @@ mod tests {
                 },
             )]
             .into(),
-            issue_activity: Default::default(),
         }
     }
 
@@ -216,6 +216,7 @@ mod tests {
             "basic",
             ts(at),
             &PullThresholds::default(),
+            &Default::default(),
             &Default::default(),
             &Default::default(),
         );

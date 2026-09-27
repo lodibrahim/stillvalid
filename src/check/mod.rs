@@ -1,5 +1,5 @@
 //! Checks: heuristic verdicts over fetched data. Pure functions, no I/O, except `merge` and
-//! `code`, which run git in the local repo.
+//! `code`, which run git in the local repo, and `info`, which reads candidates' comments.
 
 use crate::store::{Confidence, Evidence};
 

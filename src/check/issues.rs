@@ -83,6 +83,7 @@ mod tests {
             created_at: ts("2026-01-01T00:00:00Z"),
             body: None,
             pull_request: None,
+            ..Default::default()
         }
     }
 
@@ -116,7 +117,6 @@ mod tests {
             reopened_at: Default::default(),
             commits_on_branch: Default::default(),
             pull_activity: Default::default(),
-            issue_activity: Default::default(),
         }
     }
 

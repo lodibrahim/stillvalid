@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;
 use stillvalid::check::pulls::PullThresholds;
-use stillvalid::check::{code, merge};
+use stillvalid::check::{code, info, merge};
 use stillvalid::{fetch, incremental, repo, report, store};
 
 #[derive(Parser)]
@@ -114,7 +114,8 @@ async fn main() -> Result<()> {
                     "stillvalid: no GITHUB_TOKEN or `gh auth token`; using unauthenticated API (60 requests/hour) and skipping issue timelines and PR activity"
                 ),
             }
-            let snapshot = fetch::Fetcher::new(gh.build()?)
+            let fetcher = fetch::Fetcher::new(gh.build()?);
+            let snapshot = fetcher
                 .fetch(&repo, branch.as_deref(), token.is_some())
                 .await
                 .with_context(|| format!("fetching {repo}"))?;
@@ -169,6 +170,19 @@ async fn main() -> Result<()> {
                 );
             }
 
+            let now = Utc::now().trunc_subsecs(0);
+            // Needs fetched references, which need a token.
+            let info = match token {
+                Some(_) => info::check_all(&fetcher, &snapshot, &code.findings, now).await,
+                None => info::InfoChecks::default(),
+            };
+            if let Some((number, err)) = info.failed.first() {
+                eprintln!(
+                    "stillvalid: could not read comments on {} issues (first: #{number}: {err})",
+                    info.failed.len()
+                );
+            }
+
             let mode = mode.to_possible_value().expect("no skipped variants");
             let thresholds = PullThresholds {
                 abandoned_after_days,
@@ -177,10 +191,11 @@ async fn main() -> Result<()> {
             let mut report = store::build_report(
                 &snapshot,
                 mode.get_name(),
-                Utc::now().trunc_subsecs(0),
+                now,
                 &thresholds,
                 &checks.findings,
                 &code.findings,
+                &info.findings,
             );
             let blobs = local
                 .blob_shas()

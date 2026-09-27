@@ -18,7 +18,7 @@ pub enum FetchError {
 }
 
 /// An open issue. The REST issues endpoint also returns pull requests; those carry `pull_request`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Issue {
     pub number: u64,
     pub title: String,
@@ -27,6 +27,26 @@ pub struct Issue {
     pub body: Option<String>,
     #[serde(default)]
     pub pull_request: Option<serde_json::Value>,
+    #[serde(default)]
+    pub labels: Vec<Label>,
+    /// The issue's author; `None` for deleted accounts.
+    #[serde(default)]
+    pub user: Option<Login>,
+    #[serde(default)]
+    pub author_association: Association,
+    /// Number of comments.
+    #[serde(default)]
+    pub comments: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Label {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+struct IssueComment {
+    user: Option<Login>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -69,19 +89,6 @@ pub struct Snapshot {
     /// Draft flag, checks, reviews, and comments for each open PR, keyed by PR number.
     /// Empty when fetched without GraphQL.
     pub pull_activity: BTreeMap<u64, PullActivity>,
-    /// Labels, author association, and whether the reporter commented, for each open issue.
-    /// Empty when fetched without GraphQL.
-    pub issue_activity: BTreeMap<u64, IssueActivity>,
-}
-
-/// What the `needs_info` rule needs about one open issue.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IssueActivity {
-    pub labels: Vec<String>,
-    pub association: Association,
-    /// The issue's author commented on it (among the last `COMMENTS_PER_ISSUE`; also true when
-    /// there are more, since those weren't seen).
-    pub reporter_commented: bool,
 }
 
 /// Something in the same repository that mentions an issue.
@@ -109,31 +116,17 @@ pub struct PullRef {
     pub will_close: bool,
 }
 
-/// References, reopen times, and activity per open issue, from [`Fetcher::references`].
-type IssueTimelines = (
-    BTreeMap<u64, Vec<Reference>>,
-    BTreeMap<u64, DateTime<Utc>>,
-    BTreeMap<u64, IssueActivity>,
-);
-
-/// Issues per GraphQL page, and timeline events, labels, and comments per issue (past the cap
-/// are not fetched).
+/// Issues per GraphQL page, and timeline events per issue (events past the cap are not fetched).
 const ISSUES_PER_PAGE: u32 = 50;
 const EVENTS_PER_ISSUE: u32 = 100;
-const LABELS_PER_ISSUE: u32 = 20;
-const COMMENTS_PER_ISSUE: u32 = 20;
 
 const REFERENCES_QUERY: &str = r#"
-query($owner: String!, $name: String!, $cursor: String, $issues: Int!, $events: Int!, $labels: Int!, $comments: Int!) {
+query($owner: String!, $name: String!, $cursor: String, $issues: Int!, $events: Int!) {
   repository(owner: $owner, name: $name) {
     issues(states: OPEN, first: $issues, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number
-        author { login }
-        authorAssociation
-        labels(first: $labels) { nodes { name } }
-        comments(last: $comments) { totalCount nodes { author { login } } }
         timelineItems(first: $events, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT, REFERENCED_EVENT, REOPENED_EVENT]) {
           nodes {
             __typename
@@ -189,58 +182,7 @@ struct PageInfo {
 #[serde(rename_all = "camelCase")]
 struct RefsIssue {
     number: u64,
-    #[serde(default)]
-    author: Option<Login>,
-    #[serde(default = "other_association")]
-    author_association: Association,
-    #[serde(default)]
-    labels: Option<Nodes<LabelNode>>,
-    #[serde(default)]
-    comments: Option<Comments>,
     timeline_items: Timeline,
-}
-
-fn other_association() -> Association {
-    Association::Other
-}
-
-#[derive(Deserialize)]
-struct LabelNode {
-    name: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Comments {
-    total_count: u32,
-    nodes: Vec<CommentNode>,
-}
-
-#[derive(Deserialize)]
-struct CommentNode {
-    author: Option<Login>,
-}
-
-impl RefsIssue {
-    fn activity(&self) -> IssueActivity {
-        let reporter = self.author.as_ref().map(|a| a.login.as_str());
-        let reporter_commented = self.comments.as_ref().is_some_and(|c| {
-            c.total_count as usize > c.nodes.len()
-                || c.nodes
-                    .iter()
-                    .any(|n| n.author.as_ref().map(|a| a.login.as_str()) == reporter)
-        });
-        IssueActivity {
-            labels: self
-                .labels
-                .iter()
-                .flat_map(|l| &l.nodes)
-                .map(|l| l.name.clone())
-                .collect(),
-            association: self.author_association,
-            reporter_commented,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -478,7 +420,7 @@ pub enum CheckState {
 
 /// The poster's relationship to the repository. Owners, members, and collaborators have write
 /// access; contributors have had a commit merged; everything else is `Other`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Association {
     Owner,
@@ -486,6 +428,7 @@ pub enum Association {
     Collaborator,
     Contributor,
     #[serde(other)]
+    #[default]
     Other,
 }
 
@@ -563,9 +506,10 @@ struct Nodes<T> {
     nodes: Vec<T>,
 }
 
-#[derive(Deserialize)]
-struct Login {
-    login: String,
+/// A GitHub account.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Login {
+    pub login: String,
 }
 
 #[derive(Deserialize)]
@@ -695,7 +639,7 @@ impl Fetcher {
             .filter(|i| i.pull_request.is_none())
             .collect();
         let pulls = self.all_open::<Pull>(&format!("{base}/pulls")).await?;
-        let ((references, reopened_at, issue_activity), pull_activity) = if with_references {
+        let ((references, reopened_at), pull_activity) = if with_references {
             tokio::try_join!(
                 self.references(owner, name),
                 self.pull_activity(owner, name)
@@ -734,7 +678,6 @@ impl Fetcher {
             reopened_at,
             commits_on_branch,
             pull_activity,
-            issue_activity,
         })
     }
 
@@ -758,12 +701,15 @@ impl Fetcher {
     }
 
     /// Page through open issues' timelines via GraphQL: references per issue (issues with none
-    /// are omitted), latest reopen time per issue, and each issue's activity.
-    async fn references(&self, owner: &str, name: &str) -> Result<IssueTimelines, FetchError> {
+    /// are omitted) and latest reopen time per issue.
+    async fn references(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<(BTreeMap<u64, Vec<Reference>>, BTreeMap<u64, DateTime<Utc>>), FetchError> {
         let repo = format!("{owner}/{name}");
         let mut out = BTreeMap::new();
         let mut reopened = BTreeMap::new();
-        let mut activity = BTreeMap::new();
         let mut cursor: Option<String> = None;
         loop {
             let payload = json!({
@@ -774,14 +720,11 @@ impl Fetcher {
                     "cursor": cursor,
                     "issues": ISSUES_PER_PAGE,
                     "events": EVENTS_PER_ISSUE,
-                    "labels": LABELS_PER_ISSUE,
-                    "comments": COMMENTS_PER_ISSUE,
                 },
             });
             let data: RefsData = self.gh.graphql(&payload).await?;
             let issues = data.repository.issues;
             for issue in issues.nodes {
-                activity.insert(issue.number, issue.activity());
                 let (refs, reopened_at) =
                     collect_references(issue.timeline_items.nodes, &repo, issue.number);
                 if !refs.is_empty() {
@@ -793,7 +736,7 @@ impl Fetcher {
             }
             match issues.page_info.end_cursor {
                 Some(next) if issues.page_info.has_next_page => cursor = Some(next),
-                _ => return Ok((out, reopened, activity)),
+                _ => return Ok((out, reopened)),
             }
         }
     }
@@ -826,6 +769,31 @@ impl Fetcher {
             match pulls.page_info.end_cursor {
                 Some(next) if pulls.page_info.has_next_page => cursor = Some(next),
                 _ => return Ok(out),
+            }
+        }
+    }
+
+    /// Whether `login` commented on issue `number` of `repo` (pages of comments until found).
+    pub async fn commented(
+        &self,
+        repo: &str,
+        number: u64,
+        login: &str,
+    ) -> Result<bool, FetchError> {
+        let (owner, name) = split_repo(repo)?;
+        let route = format!("/repos/{owner}/{name}/issues/{number}/comments");
+        let mut page: Page<IssueComment> = self.gh.get(route, Some(&[("per_page", "100")])).await?;
+        loop {
+            if page
+                .items
+                .iter()
+                .any(|c| c.user.as_ref().is_some_and(|u| u.login == login))
+            {
+                return Ok(true);
+            }
+            match self.gh.get_page(&page.next).await? {
+                Some(next) => page = next,
+                None => return Ok(false),
             }
         }
     }
@@ -945,7 +913,10 @@ mod tests {
             .and(path("/repos/o/r/issues"))
             .and(query_param("page", "2"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                issue(3),
+                { "number": 3, "title": "Issue 3", "html_url": "https://github.com/o/r/issues/3",
+                  "created_at": "2026-01-01T00:00:00Z", "body": null,
+                  "labels": [{ "name": "bug" }], "user": { "login": "ann" },
+                  "author_association": "CONTRIBUTOR" },
                 { "number": 4, "title": "PR 4", "html_url": "https://github.com/o/r/pull/4",
                   "created_at": "2026-01-01T00:00:00Z", "body": null,
                   "pull_request": { "url": "https://api.github.com/repos/o/r/pulls/4" } }
@@ -982,8 +953,52 @@ mod tests {
         assert_eq!(snap.head_sha, "abc123");
         let issue_numbers: Vec<u64> = snap.issues.iter().map(|i| i.number).collect();
         assert_eq!(issue_numbers, [1, 2, 3]);
+        assert!(snap.issues[0].labels.is_empty() && snap.issues[0].user.is_none());
+        assert_eq!(snap.issues[0].author_association, Association::Other);
+        assert_eq!(snap.issues[2].labels[0].name, "bug");
+        assert_eq!(snap.issues[2].user.as_ref().unwrap().login, "ann");
+        assert_eq!(snap.issues[2].author_association, Association::Contributor);
         assert_eq!(snap.pulls.len(), 1);
         assert_eq!(snap.pulls[0].head.sha, "sha4");
+    }
+
+    #[tokio::test]
+    async fn commented_reads_every_page_of_comments() {
+        let server = MockServer::start().await;
+        let next = format!(
+            "<{}/repos/o/r/issues/7/comments?per_page=100&page=2>; rel=\"next\"",
+            server.uri()
+        );
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/issues/7/comments"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "user": { "login": "ann" } }
+            ])))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/issues/7/comments"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", next.as_str())
+                    .set_body_json(json!([{ "user": { "login": "bob" } }, { "user": null }])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/issues/8/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "user": { "login": "bob" } }
+            ])))
+            .mount(&server)
+            .await;
+
+        let f = fetcher(&server).await;
+        assert!(f.commented("o/r", 7, "ann").await.unwrap());
+        assert!(!f.commented("o/r", 8, "ann").await.unwrap());
+        assert!(f.commented("o/r", 9, "ann").await.is_err());
     }
 
     #[tokio::test]
@@ -1119,12 +1134,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(refs_page(
                 json!([
                     { "number": 1, "timelineItems": { "nodes": [cross_ref(10, true)] } },
-                    { "number": 2, "timelineItems": { "nodes": [] },
-                      "author": { "login": "ann" }, "authorAssociation": "NONE",
-                      "labels": { "nodes": [{ "name": "bug" }] },
-                      "comments": { "totalCount": 2, "nodes": [
-                          { "author": { "login": "bob" } }, { "author": null }
-                      ] } }
+                    { "number": 2, "timelineItems": { "nodes": [] } }
                 ]),
                 Some("c1"),
             )))
@@ -1136,9 +1146,7 @@ mod tests {
                 json!({ "variables": { "cursor": "c1" } }),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(refs_page(
-                json!([{ "number": 3, "timelineItems": { "nodes": [cross_ref(11, false)] },
-                         "author": { "login": "ann" }, "authorAssociation": "CONTRIBUTOR",
-                         "comments": { "totalCount": 1, "nodes": [{ "author": { "login": "ann" } }] } }]),
+                json!([{ "number": 3, "timelineItems": { "nodes": [cross_ref(11, false)] } }]),
                 None,
             )))
             .mount(&server)
@@ -1160,31 +1168,6 @@ mod tests {
         assert!(
             matches!(&snap.references[&3][0], Reference::Pull(p) if p.number == 11 && !p.will_close)
         );
-        assert_eq!(
-            snap.issue_activity[&2],
-            IssueActivity {
-                labels: vec!["bug".into()],
-                association: Association::Other,
-                reporter_commented: false,
-            }
-        );
-        assert_eq!(
-            snap.issue_activity[&3].association,
-            Association::Contributor
-        );
-        assert!(snap.issue_activity[&3].reporter_commented);
-        assert!(snap.issue_activity[&1].labels.is_empty());
-    }
-
-    #[test]
-    fn reporter_counts_as_commented_when_comments_were_cut_off() {
-        let issue: RefsIssue = serde_json::from_value(json!({
-            "number": 1, "timelineItems": { "nodes": [] },
-            "author": { "login": "ann" },
-            "comments": { "totalCount": 21, "nodes": [{ "author": { "login": "bob" } }] }
-        }))
-        .unwrap();
-        assert!(issue.activity().reporter_commented);
     }
 
     /// Server with branch `main` and no open issues or PRs.

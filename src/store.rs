@@ -167,8 +167,8 @@ pub fn body_hash(body: Option<&str>) -> String {
 }
 
 /// Build a report from fetched data. Issues get `likely_fixed` when [`check::issues::likely_fixed`] finds
-/// evidence, else `code` (from [`check::code::check_all`]), else `needs_info` when
-/// [`check::info::needs_info`] applies; PRs get `merges` (from
+/// evidence, else `code` (from [`check::code::check_all`]), else `needs_info` (from
+/// [`check::info`]); PRs get `merges` (from
 /// [`check::merge::check_all`]) and, with fetched activity, the activity rules; every other item
 /// is `cant_tell`.
 pub fn build_report(
@@ -178,6 +178,7 @@ pub fn build_report(
     thresholds: &PullThresholds,
     merges: &BTreeMap<u64, pulls::Finding>,
     code: &BTreeMap<u64, check::Finding>,
+    needs_info: &BTreeMap<u64, check::Finding>,
 ) -> Report {
     let unchecked = |kind, number, title: &str, url: &str, created_at, fingerprint| Item {
         kind,
@@ -209,7 +210,11 @@ pub fn build_report(
         let found = check::issues::likely_fixed(i, snapshot)
             .or_else(|| code.get(&i.number).cloned())
             .map(|f| (Verdict::LikelyFixed, f))
-            .or_else(|| check::info::needs_info(i, snapshot, now).map(|f| (Verdict::NeedsInfo, f)));
+            .or_else(|| {
+                needs_info
+                    .get(&i.number)
+                    .map(|f| (Verdict::NeedsInfo, f.clone()))
+            });
         match found {
             Some((verdict, f)) => Item {
                 verdict,
@@ -337,6 +342,7 @@ mod tests {
                     created_at: ts("2024-09-02T10:00:00Z"),
                     body: Some("It panics".into()),
                     pull_request: None,
+                    ..Default::default()
                 },
                 Issue {
                     number: 1300,
@@ -345,6 +351,7 @@ mod tests {
                     created_at: ts("2025-01-01T00:00:00Z"),
                     body: None,
                     pull_request: None,
+                    ..Default::default()
                 },
             ],
             pulls: vec![Pull {
@@ -363,7 +370,6 @@ mod tests {
             reopened_at: Default::default(),
             commits_on_branch: Default::default(),
             pull_activity: Default::default(),
-            issue_activity: Default::default(),
         }
     }
 
@@ -373,6 +379,7 @@ mod tests {
             "free-ai",
             ts("2026-09-27T03:12:00Z"),
             &PullThresholds::default(),
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
@@ -418,6 +425,7 @@ mod tests {
             &PullThresholds::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         );
         let item = &r.items[0];
         assert_eq!(item.verdict, Verdict::LikelyFixed);
@@ -458,6 +466,7 @@ mod tests {
             &PullThresholds::default(),
             &BTreeMap::new(),
             &code,
+            &BTreeMap::new(),
         );
         assert_eq!(r.items[0].confidence, Confidence::High);
         assert_eq!(r.items[0].evidence[0].reference, "#2977");
@@ -468,28 +477,14 @@ mod tests {
 
     #[test]
     fn needs_info_applies_only_without_likely_fixed() {
-        let mut snap = snapshot();
-        for (number, title) in [
-            (1204, "Panic when compacting"),
-            (1300, "Compaction is broken"),
-        ] {
-            let issue = snap.issues.iter_mut().find(|i| i.number == number).unwrap();
-            issue.title = title.into();
-            snap.issue_activity.insert(
-                number,
-                crate::fetch::IssueActivity {
-                    labels: vec!["bug".into()],
-                    association: crate::fetch::Association::Other,
-                    reporter_commented: false,
-                },
-            );
-        }
-        let gone = check::Finding {
-            confidence: Confidence::Medium,
+        let snap = snapshot();
+        let finding = |reference: &str| check::Finding {
+            confidence: Confidence::Low,
             evidence: vec![Evidence {
                 kind: EvidenceType::Commit,
-                reference: "aaaaaaa".into(),
-                note: "Deleted src/pool.rs (named in the issue)".into(),
+                reference: reference.into(),
+                note: "No version, OS, repro steps, command, code, or screenshot in the issue"
+                    .into(),
             }],
         };
         let r = build_report(
@@ -498,12 +493,20 @@ mod tests {
             ts("2026-09-27T03:12:00Z"),
             &PullThresholds::default(),
             &BTreeMap::new(),
-            &BTreeMap::from([(1204, gone)]),
+            &BTreeMap::from([(
+                1204,
+                check::Finding {
+                    confidence: Confidence::Medium,
+                    ..finding("aaaaaaa")
+                },
+            )]),
+            &BTreeMap::from([(1204, finding("9f1c2ab")), (1300, finding("9f1c2ab"))]),
         );
         assert_eq!(r.items[0].verdict, Verdict::LikelyFixed);
+        assert_eq!(r.items[0].evidence[0].reference, "aaaaaaa");
         assert_eq!(r.items[1].verdict, Verdict::NeedsInfo);
         assert_eq!(r.items[1].confidence, Confidence::Low);
-        assert_eq!(r.items[1].evidence[0].reference, "9f1c2ab");
+        assert_eq!(r.items[1].tier, Tier::Heuristic);
         assert_eq!(r.summary.issues.needs_info, 1);
     }
 
@@ -573,6 +576,7 @@ mod tests {
                 ts("2027-06-01T00:00:00Z"),
                 &PullThresholds::default(),
                 &merges,
+                &BTreeMap::new(),
                 &BTreeMap::new(),
             );
             r.items.into_iter().find(|i| i.kind == Kind::Pull).unwrap()
