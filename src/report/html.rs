@@ -76,12 +76,10 @@ pub fn render(report: &Report) -> String {
 
     let tabs = [(Kind::Issue, issues.open), (Kind::Pull, pulls.open)]
         .iter()
-        .enumerate()
-        .map(|(i, (kind, n))| {
+        .map(|(kind, n)| {
             let id = panel_id(*kind);
             format!(
-                r#"<button type="button" role="tab" id="tab-{id}" aria-controls="{id}" aria-selected="{sel}">{name} <span class="n">{n}</span></button>"#,
-                sel = i == 0,
+                r#"<button type="button" role="tab" id="tab-{id}" aria-controls="{id}" aria-selected="false">{name} <span class="n">{n}</span></button>"#,
                 name = plural(*kind),
             )
         })
@@ -118,17 +116,14 @@ fn panel(report: &Report, base: &str, kind: Kind) -> String {
 
     let id = panel_id(kind);
     let name = plural(kind);
+    let lower = name.to_lowercase();
     let mut out = format!(
         r#"<section class="panel" id="{id}" role="tabpanel" aria-labelledby="tab-{id}">
 <h2>{name}</h2>
 "#
     );
     if items.is_empty() {
-        let _ = writeln!(
-            out,
-            r#"<p class="empty">No open {}.</p>"#,
-            name.to_lowercase()
-        );
+        let _ = writeln!(out, r#"<p class="empty">No open {lower}.</p>"#);
         out.push_str("</section>");
         return out;
     }
@@ -163,8 +158,7 @@ fn panel(report: &Report, base: &str, kind: Kind) -> String {
 
     let _ = writeln!(
         out,
-        r#"<div class="filters" role="group" aria-label="Show {lower} by verdict">"#,
-        lower = name.to_lowercase()
+        r#"<div class="filters" role="group" aria-label="Show {lower} by verdict">"#
     );
     for (v, n) in &counts {
         let _ = writeln!(
@@ -179,12 +173,11 @@ fn panel(report: &Report, base: &str, kind: Kind) -> String {
         r#"<button type="button" class="reset">Show all</button>
 </div>
 <p class="shown" aria-live="polite">{total} of {total} shown</p>
-<div class="scroll"><table>
+<table>
 <caption class="sr-only">Open {lower}</caption>
 <thead><tr><th scope="col">{singular}</th><th scope="col">Verdict</th><th scope="col">Evidence</th><th scope="col">Opened</th></tr></thead>
 <tbody>
 "#,
-        lower = name.to_lowercase(),
         singular = match kind {
             Kind::Issue => "Issue",
             Kind::Pull => "Pull request",
@@ -193,7 +186,7 @@ fn panel(report: &Report, base: &str, kind: Kind) -> String {
     for item in items {
         out.push_str(&row(report, base, item));
     }
-    out.push_str("</tbody>\n</table></div>\n</section>");
+    out.push_str("</tbody>\n</table>\n</section>");
     out
 }
 
@@ -203,22 +196,18 @@ fn row(report: &Report, base: &str, item: &Item) -> String {
         true => format!(r#"<a href="{}">{title}</a>"#, escape(&item.url)),
         false => title,
     };
-    // No check gave an unchecked item its confidence, so it has no line under the verdict.
-    let tier = match item.tier {
-        Tier::None => None,
-        Tier::Heuristic => Some("heuristic"),
-        Tier::Llm => Some("AI"),
+    let confidence = match item.confidence {
+        Confidence::High => "high",
+        Confidence::Medium => "medium",
+        Confidence::Low => "low",
     };
-    let sub = match tier {
-        Some(tier) => {
-            let confidence = match item.confidence {
-                Confidence::High => "high",
-                Confidence::Medium => "medium",
-                Confidence::Low => "low",
-            };
-            format!(r#"<span class="sub">{confidence} confidence · {tier}</span>"#)
+    // No check gave an unchecked item its confidence, so it has no line under the verdict.
+    let sub = match item.tier {
+        Tier::None => String::new(),
+        Tier::Heuristic => {
+            format!(r#"<span class="sub">{confidence} confidence · heuristic</span>"#)
         }
-        None => String::new(),
+        Tier::Llm => format!(r#"<span class="sub">{confidence} confidence · AI</span>"#),
     };
     let evidence = match item.evidence.is_empty() {
         true => r#"<span class="muted">No evidence</span>"#.to_string(),
@@ -317,18 +306,10 @@ fn plural(kind: Kind) -> &'static str {
 }
 
 /// The verdict as it appears in report.json; also the CSS class and filter key.
-fn key(v: Verdict) -> &'static str {
-    match v {
-        Verdict::LikelyFixed => "likely_fixed",
-        Verdict::StillValid => "still_valid",
-        Verdict::Duplicate => "duplicate",
-        Verdict::NeedsInfo => "needs_info",
-        Verdict::StillApplies => "still_applies",
-        Verdict::Superseded => "superseded",
-        Verdict::Conflicts => "conflicts",
-        Verdict::Abandoned => "abandoned",
-        Verdict::ReadyUnreviewed => "ready_unreviewed",
-        Verdict::CantTell => "cant_tell",
+fn key(v: Verdict) -> String {
+    match serde_json::to_value(v) {
+        Ok(serde_json::Value::String(s)) => s,
+        _ => unreachable!("Verdict serializes as a string"),
     }
 }
 

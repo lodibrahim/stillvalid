@@ -7,9 +7,9 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct Badge {
     pub schema_version: u32,
-    pub label: String,
+    pub label: &'static str,
     pub message: String,
-    pub color: String,
+    pub color: &'static str,
 }
 
 /// "likely fixed: 12 of 125 issues", in informational blue.
@@ -21,9 +21,9 @@ pub fn badge(report: &Report) -> Badge {
     };
     Badge {
         schema_version: 1,
-        label: "likely fixed".into(),
+        label: "likely fixed",
         message,
-        color: color.into(),
+        color,
     }
 }
 
