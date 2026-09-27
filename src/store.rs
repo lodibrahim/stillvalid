@@ -298,6 +298,7 @@ mod tests {
                     sha: "c0ffee1".into(),
                 },
             }],
+            references: Default::default(),
         }
     }
 
