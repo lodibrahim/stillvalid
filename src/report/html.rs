@@ -9,17 +9,17 @@ use crate::store::{Confidence, Evidence, EvidenceType, Item, Kind, Report, Tier,
 use std::fmt::Write;
 
 const TEMPLATE: &str = include_str!("dashboard.html");
-const GITHUB: &str = "https://github.com/";
+pub(crate) const GITHUB: &str = "https://github.com/";
 
 /// Display and sort order per tab: most actionable first, `cant_tell` last.
-const ISSUE_VERDICTS: &[Verdict] = &[
+pub(crate) const ISSUE_VERDICTS: &[Verdict] = &[
     Verdict::LikelyFixed,
     Verdict::StillValid,
     Verdict::NeedsInfo,
     Verdict::Duplicate,
     Verdict::CantTell,
 ];
-const PULL_VERDICTS: &[Verdict] = &[
+pub(crate) const PULL_VERDICTS: &[Verdict] = &[
     Verdict::Superseded,
     Verdict::Abandoned,
     Verdict::Conflicts,
@@ -196,11 +196,7 @@ fn row(report: &Report, base: &str, item: &Item) -> String {
         true => format!(r#"<a href="{}">{title}</a>"#, escape(&item.url)),
         false => title,
     };
-    let confidence = match item.confidence {
-        Confidence::High => "high",
-        Confidence::Medium => "medium",
-        Confidence::Low => "low",
-    };
+    let confidence = confidence_name(item.confidence);
     // No check gave an unchecked item its confidence, so it has no line under the verdict.
     let sub = match item.tier {
         Tier::None => String::new(),
@@ -264,7 +260,7 @@ fn evidence(report: &Report, base: &str, e: &Evidence) -> String {
 }
 
 /// GitHub link for an evidence ref: `#N` → PR, hex → commit, `path[:line]` → file at `head_sha`.
-fn evidence_href(report: &Report, base: &str, e: &Evidence) -> Option<String> {
+pub(crate) fn evidence_href(report: &Report, base: &str, e: &Evidence) -> Option<String> {
     let r = e.reference.as_str();
     match e.kind {
         EvidenceType::Pull => r
@@ -306,14 +302,22 @@ fn plural(kind: Kind) -> &'static str {
 }
 
 /// The verdict as it appears in report.json; also the CSS class and filter key.
-fn key(v: Verdict) -> String {
+pub(crate) fn key(v: Verdict) -> String {
     match serde_json::to_value(v) {
         Ok(serde_json::Value::String(s)) => s,
         _ => unreachable!("Verdict serializes as a string"),
     }
 }
 
-fn label(v: Verdict) -> &'static str {
+pub(crate) fn confidence_name(c: Confidence) -> &'static str {
+    match c {
+        Confidence::High => "high",
+        Confidence::Medium => "medium",
+        Confidence::Low => "low",
+    }
+}
+
+pub(crate) fn label(v: Verdict) -> &'static str {
     match v {
         Verdict::LikelyFixed => "Likely fixed",
         Verdict::StillValid => "Still valid",
@@ -344,7 +348,7 @@ fn escape(s: &str) -> String {
 }
 
 /// Percent-encode a URL path, keeping `/` and unreserved characters.
-fn encode_path(s: &str) -> String {
+pub(crate) fn encode_path(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

@@ -65,6 +65,18 @@ jobs:
           branch: main
 ```
 
+## Labels and the summary issue
+
+Off by default; the scan writes nothing to GitHub unless asked. Both need a token with `issues: write` (without one, or on a 403, the scan prints a warning and still writes its report).
+
+```sh
+stillvalid scan owner/repo --labels --summary-issue --dashboard-url https://owner.github.io/repo/
+stillvalid scan owner/repo --labels --summary-issue --dry-run   # print what would change
+```
+
+- `--labels` puts one `stillvalid: <verdict>` label on each issue and PR (none for "can't tell"), creates missing labels, and swaps it when the verdict changes. Other labels are never touched. Saved filter: `is:open label:"stillvalid: likely-fixed"`.
+- `--summary-issue` keeps one pinned "Backlog health" issue up to date: totals per verdict and the top likely-fixed issues with evidence. If a maintainer closes it, it stays closed.
+
 ## Modes
 
 | Mode | Needs | What it can tell you |

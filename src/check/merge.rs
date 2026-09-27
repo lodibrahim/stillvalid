@@ -328,6 +328,7 @@ mod tests {
                     created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
                     head: PullHead { sha: sha.into() },
                     base: PullBase { name: base.into() },
+                    labels: Vec::new(),
                 })
                 .collect(),
             references: Default::default(),

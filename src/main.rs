@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use stillvalid::check::pulls::PullThresholds;
 use stillvalid::check::{code, info, merge};
+use stillvalid::report::github;
 use stillvalid::{fetch, incremental, repo, report, store};
 
 #[derive(Parser)]
@@ -64,6 +65,22 @@ enum Command {
         /// Days open without a review before a green PR is `ready_unreviewed`
         #[arg(long, default_value_t = PullThresholds::default().unreviewed_after_days)]
         unreviewed_after_days: u32,
+
+        /// Put a `stillvalid: <verdict>` label on each issue and PR (needs issues: write)
+        #[arg(long)]
+        labels: bool,
+
+        /// Create or update the "Backlog health" summary issue (needs issues: write)
+        #[arg(long)]
+        summary_issue: bool,
+
+        /// Dashboard URL to link from the summary issue
+        #[arg(long)]
+        dashboard_url: Option<String>,
+
+        /// With --labels / --summary-issue: print what would change on GitHub, write nothing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -91,6 +108,10 @@ async fn main() -> Result<()> {
             repo_path,
             abandoned_after_days,
             unreviewed_after_days,
+            labels,
+            summary_issue,
+            dashboard_url,
+            dry_run,
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
             // Read it before the long fetch so a bad file fails fast; a missing one means a first run.
@@ -114,11 +135,13 @@ async fn main() -> Result<()> {
                     "stillvalid: no GITHUB_TOKEN or `gh auth token`; using unauthenticated API (60 requests/hour) and skipping issue timelines and PR activity"
                 ),
             }
-            let fetcher = fetch::Fetcher::new(gh.build()?);
-            let snapshot = fetcher
+            let gh = gh.build()?;
+            let fetcher = fetch::Fetcher::new(gh.clone());
+            let mut snapshot = fetcher
                 .fetch(&repo, branch.as_deref(), token.is_some())
                 .await
                 .with_context(|| format!("fetching {repo}"))?;
+            github::drop_summary(&mut snapshot);
 
             let started = Instant::now();
             let local = match &repo_path {
@@ -243,8 +266,104 @@ async fn main() -> Result<()> {
                     dir.join("index.html").display()
                 );
             }
+            if labels || summary_issue {
+                if token.is_none() {
+                    eprintln!("stillvalid: --labels / --summary-issue need a token with issues: write; skipping");
+                    return Ok(());
+                }
+                let writer = github::Writer::new(gh, &report.repo);
+                if labels {
+                    if let Err(e) = apply_labels(&writer, &report, &snapshot, dry_run).await {
+                        eprintln!("stillvalid: skipping labels: {e}");
+                    }
+                }
+                if summary_issue {
+                    let url = dashboard_url.filter(|u| {
+                        let ok = u.starts_with("https://");
+                        if !ok {
+                            eprintln!(
+                                "stillvalid: ignoring --dashboard-url {u}: not an https:// URL"
+                            );
+                        }
+                        ok
+                    });
+                    let body = github::summary_body(&report, url.as_deref());
+                    match writer.sync_summary(&snapshot.issues, &body, dry_run).await {
+                        Ok(outcome) => {
+                            print_summary(&outcome);
+                            if matches!(
+                                outcome,
+                                github::SummaryOutcome::WouldCreate
+                                    | github::SummaryOutcome::WouldUpdate(_)
+                            ) {
+                                eprintln!("{body}");
+                            }
+                        }
+                        Err(e) => eprintln!("stillvalid: skipping the summary issue: {e}"),
+                    }
+                }
+            }
             Ok(())
         }
+    }
+}
+
+/// Bring each item's `stillvalid:` label in line with its verdict (or print the changes).
+async fn apply_labels(
+    writer: &github::Writer,
+    report: &store::Report,
+    snapshot: &fetch::Snapshot,
+    dry_run: bool,
+) -> Result<(), github::GithubError> {
+    let changes = github::plan_labels(report, snapshot);
+    if changes.is_empty() {
+        eprintln!("stillvalid: labels already up to date");
+        return Ok(());
+    }
+    let missing = match changes.iter().any(|c| c.add.is_some()) {
+        true => github::missing_labels(&changes, &writer.repo_labels().await?),
+        false => Vec::new(),
+    };
+    if dry_run {
+        for v in &missing {
+            let name = github::label_name(*v).expect("only labeled verdicts are missing");
+            eprintln!("stillvalid: would create label `{name}`");
+        }
+        for change in &changes {
+            eprintln!("stillvalid: would {}", change.describe());
+        }
+        return Ok(());
+    }
+    let done = writer.apply_labels(&changes, &missing).await?;
+    eprintln!(
+        "stillvalid: labels: created {} labels, updated {} items",
+        done.created, done.changed
+    );
+    if let Some((number, err)) = done.failed.first() {
+        eprintln!(
+            "stillvalid: could not label {} items (first: #{number}: {err})",
+            done.failed.len()
+        );
+    }
+    Ok(())
+}
+
+fn print_summary(outcome: &github::SummaryOutcome) {
+    use github::SummaryOutcome::*;
+    match outcome {
+        Unchanged(n) => eprintln!("stillvalid: summary issue #{n} already up to date"),
+        Updated(n) => eprintln!("stillvalid: updated summary issue #{n}"),
+        Created { number, pinned } => {
+            eprintln!("stillvalid: created summary issue #{number}");
+            if let Err(e) = pinned {
+                eprintln!("stillvalid: could not pin #{number}: {e}");
+            }
+        }
+        Closed(n) => eprintln!(
+            "stillvalid: summary issue #{n} was closed by a maintainer; leaving it closed"
+        ),
+        WouldUpdate(n) => eprintln!("stillvalid: would update summary issue #{n}"),
+        WouldCreate => eprintln!("stillvalid: would create the summary issue"),
     }
 }
 

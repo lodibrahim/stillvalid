@@ -101,7 +101,8 @@ pub enum Verdict {
     CantTell,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Ordered strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     High,
@@ -365,6 +366,7 @@ mod tests {
                 base: PullBase {
                     name: "main".into(),
                 },
+                labels: Vec::new(),
             }],
             references: Default::default(),
             reopened_at: Default::default(),

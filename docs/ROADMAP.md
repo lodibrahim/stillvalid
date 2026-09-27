@@ -40,8 +40,8 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 
 ### Outputs
 - [x] Dashboard HTML (embedded template) — summary tiles, verdict breakdown bar, Issues/PRs tabs, verdict filters, table with evidence
-- [ ] Labels (opt-in via `issues: write`)
-- [ ] Pinned "Backlog health" issue
+- [x] Labels (opt-in via `issues: write`)
+- [x] Pinned "Backlog health" issue
 - [x] Badge endpoint JSON
 
 ### Action

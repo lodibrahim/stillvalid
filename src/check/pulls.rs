@@ -226,6 +226,7 @@ mod tests {
             base: PullBase {
                 name: "main".into(),
             },
+            labels: Vec::new(),
         }
     }
 
