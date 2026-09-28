@@ -43,27 +43,27 @@ curl -sSf https://…/install.sh | sh     # any Unix
 stillvalid scan owner/repo --mode basic --html site
 ```
 
-## Use in a repo (planned)
+## Use in a repo
+
+Copy [examples/workflow.yml](examples/workflow.yml) to `.github/workflows/stillvalid.yml`:
 
 ```yaml
-# .github/workflows/stillvalid.yml
-on:
-  schedule: [{ cron: "0 3 * * *" }]
-  workflow_dispatch:
 permissions:
-  issues: write          # labels + pinned summary (use `read` for dashboard only)
+  contents: write        # publish the report to the gh-pages branch
+  issues: read           # set to `write` to enable labels / summary-issue
   pull-requests: read
-  contents: write        # publish report to gh-pages
-  models: read           # free-ai mode (GitHub Models)
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
       - uses: lodibrahim/stillvalid@v1
         with:
-          mode: free-ai
-          branch: main
+          mode: basic
 ```
+
+Each run installs the released binary (`version`, default `latest`), scans, and commits `report.json`, `index.html` and `badge.json` to `stillvalid/` on the `gh-pages` branch (created on the first run; no commit when nothing changed). The next run reads that `report.json` as its previous report. Inputs: `mode`, `branch`, `version`, `publish-pages` (default `true`), `labels` and `summary-issue` (default `false`, need `issues: write`).
+
+To see the dashboard, turn on Pages once: **Settings → Pages → Build and deployment → Deploy from a branch**, branch `gh-pages`, folder `/ (root)`. It is then at `https://<owner>.github.io/<repo>/stillvalid/`. The link in the "Backlog health" issue assumes that address, so it won't match a custom Pages domain.
 
 ## Labels and the summary issue
 

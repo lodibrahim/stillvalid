@@ -45,8 +45,8 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [x] Badge endpoint JSON
 
 ### Action
-- [ ] `action.yml` downloads release binary, runs scan, pushes to `gh-pages`
-- [ ] Example workflow in `examples/`
+- [x] `action.yml` downloads release binary, runs scan, pushes to `gh-pages`
+- [x] Example workflow in `examples/`
 
 ### Validate
 - [ ] Dogfood on this repo
