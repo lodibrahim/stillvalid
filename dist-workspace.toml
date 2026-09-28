@@ -23,10 +23,10 @@ install-updater = false
 tap = "lodibrahim/homebrew-tap"
 # Sign release artifacts with GitHub artifact attestations (`gh attestation verify`).
 github-attestations = true
-# npm publish with trusted publishing (dist's builtin "npm" job needs a token);
-# see .github/workflows/publish-npm.yml.
-publish-jobs = ["./publish-npm"]
-github-custom-job-permissions = { "publish-npm" = { contents = "read", id-token = "write" } }
+# npm and crates.io publish with trusted publishing (dist's builtin "npm" job needs a
+# token); see .github/workflows/publish-npm.yml and publish-crates.yml.
+publish-jobs = ["./publish-npm", "./publish-crates"]
+github-custom-job-permissions = { "publish-npm" = { contents = "read", id-token = "write" }, "publish-crates" = { contents = "read", id-token = "write" } }
 
 # Pin every action to a full commit SHA (repo rule; see .github/workflows/ci.yml).
 [dist.github-action-commits]

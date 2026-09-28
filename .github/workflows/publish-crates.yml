@@ -1,0 +1,30 @@
+# Called by release.yml (dist custom publish job) after the GitHub Release exists.
+# Publishes the tagged commit to crates.io with trusted publishing (no token secret).
+# See CONTRIBUTING "Releasing".
+name: publish-crates
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

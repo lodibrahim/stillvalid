@@ -4,6 +4,8 @@
 
 > **Status: early release (v0.1.0).** `basic` mode only; the AI modes are coming soon. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
+**Live example:** [this repo's dashboard](https://lodibrahim.github.io/stillvalid/stillvalid/) [![stillvalid](https://img.shields.io/endpoint?url=https://lodibrahim.github.io/stillvalid/stillvalid/badge.json)](https://lodibrahim.github.io/stillvalid/stillvalid/), updated nightly by [`.github/workflows/stillvalid.yml`](.github/workflows/stillvalid.yml). It goes live once GitHub Pages is enabled for this repo.
+
 ## Why
 
 Large open-source projects carry thousands of open issues and PRs. Many were fixed long ago by a PR that never linked them; many PRs were superseded by later changes on `main`. Existing stale bots close things by *age*, not by whether the problem still exists. Nobody — maintainers, contributors or users — can see the real backlog.
