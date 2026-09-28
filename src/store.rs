@@ -323,7 +323,9 @@ pub fn read_report(path: &Path) -> Result<Report, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::{CheckState, Issue, Mergeable, Pull, PullActivity, PullBase, PullHead};
+    use crate::fetch::{
+        CheckState, Issue, Mergeable, Pull, PullActivity, PullBase, PullCommit, PullHead,
+    };
     use serde_json::Value;
 
     fn ts(s: &str) -> DateTime<Utc> {
@@ -521,7 +523,7 @@ mod tests {
                 draft: false,
                 author: Some("alice".into()),
                 mergeable: Mergeable::Mergeable,
-                head_committed_at: None,
+                commits: vec![],
                 checks: Some(CheckState::Success),
                 reviews: vec![],
                 comments: vec![],
@@ -554,7 +556,7 @@ mod tests {
             draft: false,
             author: Some("alice".into()),
             mergeable: Mergeable::Unknown,
-            head_committed_at: None,
+            commits: vec![],
             checks: Some(CheckState::Pending),
             reviews: vec![],
             comments: vec![],
@@ -562,7 +564,12 @@ mod tests {
         };
         // Pushed last month; checks passing.
         let green = PullActivity {
-            head_committed_at: Some(ts("2027-05-01T00:00:00Z")),
+            commits: vec![PullCommit {
+                at: ts("2027-05-01T00:00:00Z"),
+                by: Some("alice".into()),
+                authored_at: ts("2027-05-01T00:00:00Z"),
+                author: Some("alice".into()),
+            }],
             checks: Some(CheckState::Success),
             ..idle.clone()
         };

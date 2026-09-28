@@ -1,5 +1,5 @@
 # Optional. Copy to .stillvalid.yml at the root of the scanned repo.
-mode: free-ai            # basic | free-ai | pro-ai
+mode: basic              # basic | free-ai | pro-ai
 branch: main             # branch where development happens
 skip_labels: [wontfix, discussion]
 

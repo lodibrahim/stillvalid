@@ -100,9 +100,9 @@ Store per item: hash of issue body/comments, list of related files + their blob 
 
 | Mode | Needs | Uses |
 |---|---|---|
-| `basic` | nothing | Tier 1 only |
-| `free-ai` (default) | nothing | Tier 1 + GitHub Models via `GITHUB_TOKEN` (`models: read`); rate-limited, so large repos are scanned over several nights |
-| `pro-ai` | API key secret | Tier 1 + any provider (Anthropic, OpenAI, OpenAI-compatible/local e.g. Ollama) |
+| `basic` (default) | nothing | Tier 1 only |
+| `free-ai` (coming soon) | nothing | Tier 1 + GitHub Models via `GITHUB_TOKEN` (`models: read`); rate-limited, so large repos are scanned over several nights |
+| `pro-ai` (coming soon) | API key secret | Tier 1 + any provider (Anthropic, OpenAI, OpenAI-compatible/local e.g. Ollama) |
 
 Self-hosted runners can point `pro-ai` at a local model for zero per-call cost.
 
@@ -131,7 +131,7 @@ Suggested crates: `clap` (CLI), `octocrab` (GitHub API), `tokio`, `reqwest`, `se
 ## 8. Configuration — `.stillvalid.yml`
 
 ```yaml
-mode: free-ai            # basic | free-ai | pro-ai
+mode: basic              # basic | free-ai | pro-ai
 branch: main             # branch where development happens
 skip_labels: [wontfix, discussion]
 outputs:

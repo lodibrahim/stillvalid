@@ -35,7 +35,7 @@ enum Command {
         repo: String,
 
         /// How much checking to do
-        #[arg(long, value_enum, default_value_t = Mode::FreeAi)]
+        #[arg(long, value_enum, default_value_t = Mode::Basic)]
         mode: Mode,
 
         /// Branch where development happens (defaults to the repo's default branch)
@@ -88,9 +88,9 @@ enum Command {
 enum Mode {
     /// Heuristics only, no AI
     Basic,
-    /// Heuristics + GitHub Models via GITHUB_TOKEN
+    /// Heuristics + GitHub Models via GITHUB_TOKEN (not built yet; runs basic)
     FreeAi,
-    /// Heuristics + your own LLM provider
+    /// Heuristics + your own LLM provider (not built yet; runs basic)
     ProAi,
 }
 
@@ -114,6 +114,15 @@ async fn main() -> Result<()> {
             dry_run,
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
+            if !matches!(mode, Mode::Basic) {
+                let name = mode.to_possible_value().expect("no skipped variants");
+                eprintln!(
+                    "stillvalid: --mode {} is not built yet; running basic",
+                    name.get_name()
+                );
+            }
+            // Only basic is built; the AI modes run it too.
+            let mode = Mode::Basic;
             // Read it before the long fetch so a bad file fails fast; a missing one means a first run.
             let previous = match previous {
                 Some(path) if !path.exists() => {
