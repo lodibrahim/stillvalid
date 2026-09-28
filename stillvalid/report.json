@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "tool": {
+    "name": "stillvalid",
+    "version": "0.1.0"
+  },
+  "repo": "lodibrahim/stillvalid",
+  "branch": "main",
+  "head_sha": "e2418e45132e92a2f802d5dd9f94b84fe816db16",
+  "mode": "basic",
+  "scanned_at": "2026-09-28T01:10:14Z",
+  "summary": {
+    "issues": {
+      "open": 2,
+      "likely_fixed": 0,
+      "still_valid": 0,
+      "duplicate": 0,
+      "needs_info": 0,
+      "cant_tell": 2
+    },
+    "pulls": {
+      "open": 0,
+      "still_applies": 0,
+      "superseded": 0,
+      "conflicts": 0,
+      "abandoned": 0,
+      "ready_unreviewed": 0,
+      "cant_tell": 0
+    }
+  },
+  "items": [
+    {
+      "kind": "issue",
+      "number": 20,
+      "title": "publish a Homebrew formula on release",
+      "url": "https://github.com/lodibrahim/stillvalid/issues/20",
+      "created_at": "2026-09-28T01:03:15Z",
+      "verdict": "cant_tell",
+      "confidence": "low",
+      "tier": "none",
+      "evidence": [],
+      "fingerprint": {
+        "body_hash": "sha256:4e00ef47d91ad0cce535223086d5fb61d97f0013bb22743751fe206cf80cf064",
+        "related_files": {
+          "dist-workspace.toml": "blob:3e954041f583371cff73b6c8e087ce9c1dfdfa46"
+        }
+      },
+      "checked_at": "2026-09-28T01:10:14Z"
+    },
+    {
+      "kind": "issue",
+      "number": 11,
+      "title": "polish dashboard UI",
+      "url": "https://github.com/lodibrahim/stillvalid/issues/11",
+      "created_at": "2026-09-27T22:12:08Z",
+      "verdict": "cant_tell",
+      "confidence": "low",
+      "tier": "none",
+      "evidence": [],
+      "fingerprint": {
+        "body_hash": "sha256:df5c7a06c9cc76a77ad2c88f36fb27b66d9e6fe82c14e496749633a1e6d01520",
+        "related_files": {}
+      },
+      "checked_at": "2026-09-28T01:10:14Z"
+    }
+  ]
+}
