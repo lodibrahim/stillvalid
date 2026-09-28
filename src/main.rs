@@ -94,6 +94,10 @@ enum Command {
         /// pro-ai: most model calls per run; the next run continues where this one stopped
         #[arg(long, default_value_t = 200)]
         max_llm_calls: usize,
+
+        /// pro-ai: print each raw model answer to stderr (it includes the issue's code)
+        #[arg(long, env = "STILLVALID_AI_DEBUG", value_parser = clap::builder::FalseyValueParser::new())]
+        ai_debug: bool,
     },
 }
 
@@ -128,6 +132,7 @@ async fn main() -> Result<()> {
             ai_base_url,
             ai_model,
             max_llm_calls,
+            ai_debug,
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
             let (mode, client) = match mode {
@@ -295,7 +300,15 @@ async fn main() -> Result<()> {
             }
             if let Some((client, prepared)) = &mut ai {
                 let started = Instant::now();
-                let run = ai::run(&mut report, &snapshot, prepared, client, max_llm_calls).await;
+                let run = ai::run(
+                    &mut report,
+                    &snapshot,
+                    prepared,
+                    client,
+                    max_llm_calls,
+                    ai_debug,
+                )
+                .await;
                 eprintln!(
                     "stillvalid: model: {} calls ({} likely_fixed, {} still_valid, {} cant_tell), {} issues left for the next run ({:.1}s)",
                     run.calls,

@@ -32,6 +32,8 @@ const GREP_PER_FILE: u32 = 20;
 const MAX_REASON_CHARS: usize = 300;
 /// Evidence items kept per verdict.
 const MAX_CITATIONS: usize = 3;
+/// Test files shown per issue, besides ones the issue names.
+const MAX_TEST_FILES: usize = 1;
 /// Failed calls in a row before the run stops calling the model.
 const MAX_ERRORS_IN_A_ROW: usize = 5;
 
@@ -65,6 +67,14 @@ static FLAG: LazyLock<Regex> = LazyLock::new(|| {
 static IDENT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b").unwrap());
 static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[A-Za-z]+\b").unwrap());
+/// Pathspecs for every source file ([`is_source`]), in any case.
+static SOURCE_PATHSPECS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    index::CODE_EXTS
+        .iter()
+        .filter(|ext| is_source(&format!("x.{ext}")))
+        .map(|ext| format!(":(icase)*.{ext}"))
+        .collect()
+});
 static FENCE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)^\s*```(?:json)?\s*(.*?)\s*```\s*$").unwrap());
 
@@ -194,6 +204,13 @@ pub fn retrieve(
         hits.named.extend(*line);
     }
     let named: HashSet<String> = files.keys().cloned().collect();
+    // Only source files and named files count, so grep only those: git grep can take seconds on
+    // one large data file.
+    let pathspecs: Vec<String> = SOURCE_PATHSPECS
+        .iter()
+        .cloned()
+        .chain(named.iter().map(|p| format!(":(literal){p}")))
+        .collect();
 
     let searches = [
         Search {
@@ -222,12 +239,15 @@ pub fn retrieve(
     {
         let refs: Vec<&str> = needles.iter().map(|(n, _)| *n).collect();
         let mut found: HashSet<(String, usize)> = HashSet::new();
-        for (path, line, text) in
-            repo.grep_all(head, &refs, word, ignore_case, GREP_PER_FILE, token)?
-        {
-            if !named.contains(&path) && !is_source(&path) {
-                continue;
-            }
+        for (path, line, text) in repo.grep_all(
+            head,
+            &refs,
+            word,
+            ignore_case,
+            GREP_PER_FILE,
+            &pathspecs,
+            token,
+        )? {
             let text = match ignore_case {
                 true => text.to_ascii_lowercase(),
                 false => text,
@@ -244,6 +264,12 @@ pub fn retrieve(
 
     let mut ranked: Vec<(String, Hits)> = files.into_iter().collect();
     ranked.sort_by(|a, b| b.1.score.cmp(&a.1.score).then_with(|| a.0.cmp(&b.0)));
+    let mut tests = 0;
+    ranked.retain(|(path, _)| {
+        let extra_test = !named.contains(path) && is_test_file(path);
+        tests += usize::from(extra_test);
+        !extra_test || tests <= MAX_TEST_FILES
+    });
     let mut excerpts = Vec::new();
     let mut budget = MAX_CODE_CHARS;
     for (path, hits) in ranked.into_iter().take(MAX_FILES) {
@@ -264,6 +290,24 @@ pub fn retrieve(
 fn is_source(path: &str) -> bool {
     let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     ext.is_some_and(|e| index::CODE_EXTS.contains(&e.as_str())) && code::is_code_file(path)
+}
+
+/// Whether `path` holds tests: it is under a `test`, `tests`, `__tests__`, `spec`, `testdata`,
+/// or `fixtures` directory, or its name looks like `test_x`, `x_test`, `x.test.ts`, `x_spec`,
+/// `x.spec.js`, `XTest`, `XTests`, or `tests.rs`.
+fn is_test_file(path: &str) -> bool {
+    const DIRS: &[&str] = &["test", "tests", "__tests__", "spec", "testdata", "fixtures"];
+    let (dirs, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let stem = name.split('.').next().unwrap_or(name);
+    dirs.split('/')
+        .any(|d| DIRS.contains(&d.to_ascii_lowercase().as_str()))
+        || matches!(stem, "test" | "tests")
+        || stem.starts_with("test_")
+        || ["_test", "_spec", "Test", "Tests"]
+            .iter()
+            .any(|s| stem.ends_with(s))
+        || name.contains(".test.")
+        || name.contains(".spec.")
 }
 
 /// Lines of `content` within [`CONTEXT_LINES`] of `named` (lines the issue names) and `hits`
@@ -509,13 +553,15 @@ pub struct Run {
 /// then newest, making at most `max_calls` calls. Calls stop early on a rate limit the client
 /// won't wait out, a refused key, the endpoint reporting no requests left, or
 /// [`MAX_ERRORS_IN_A_ROW`] failures. Unchecked items stay `cant_tell` with tier `none`, so the
-/// next run (with `--previous`) reuses this run's answers and continues with them.
+/// next run (with `--previous`) reuses this run's answers and continues with them. With `debug`,
+/// each raw answer (or error) goes to stderr.
 pub async fn run(
     report: &mut Report,
     snapshot: &Snapshot,
     prepared: &Prepared,
     client: &mut Client,
     max_calls: usize,
+    debug: bool,
 ) -> Run {
     let issues: HashMap<u64, &Issue> = snapshot.issues.iter().map(|i| (i.number, i)).collect();
     let mut order: Vec<(usize, &Issue)> = report
@@ -545,10 +591,20 @@ pub async fn run(
         let excerpts = &prepared.excerpts[&issue.number];
         let user = prompt(issue, &report.head_sha, excerpts);
         run.calls += 1;
-        match client
+        let answer = client
             .complete(SYSTEM_PROMPT, &user, "verdict", &schema)
-            .await
-        {
+            .await;
+        if debug {
+            let n = issue.number;
+            match &answer {
+                Ok(c) => eprintln!("stillvalid: model answer for #{n}: {}", c.content),
+                Err(LlmError::Truncated { content }) => {
+                    eprintln!("stillvalid: model answer for #{n} (cut off): {content}")
+                }
+                Err(e) => eprintln!("stillvalid: model call for #{n} failed: {e}"),
+            }
+        }
+        match answer {
             Ok(completion) => {
                 errors_in_a_row = 0;
                 let (verdict, confidence, evidence) = judge(&completion.content, excerpts);
@@ -711,6 +767,85 @@ mod tests {
         assert!(got[0].text.starts_with("120| // filler 120\n"));
         assert!(got[0].text.contains("150| fn compact()"));
         assert_eq!(got[1].ranges, [(1, 40)]);
+    }
+
+    #[test]
+    fn retrieval_shows_one_test_file_unless_named() {
+        let (_tmp, repo) = repo(&[
+            (
+                "src/pool.rs",
+                "fn run_once() {}
+",
+            ),
+            ("tests/pool.rs", "run_once(); // compact_pool\n"),
+            ("src/pool_test.go", "run_once() // compact_pool\n"),
+            ("src/pool.spec.ts", "run_once() // compact_pool\n"),
+            ("src/Upper.RS", "fn run_once() {}\n"),
+        ]);
+        let issue = |body: &str| issue(1, "Pool", body);
+        let got = retrieve(&issue("`run_once` and `compact_pool`"), &repo, None).unwrap();
+        let paths: Vec<&str> = got.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["src/pool.spec.ts", "src/Upper.RS", "src/pool.rs"]);
+
+        let named = "`run_once` and `compact_pool` in tests/pool.rs and src/pool_test.go";
+        let got = retrieve(&issue(named), &repo, None).unwrap();
+        let paths: Vec<&str> = got.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "src/pool_test.go",
+                "tests/pool.rs",
+                "src/pool.spec.ts",
+                "src/Upper.RS"
+            ]
+        );
+    }
+
+    #[test]
+    fn retrieval_greps_named_files_that_are_not_source() {
+        let (_tmp, repo) = repo(&[
+            ("data/events.txt", &file(200, 150, "run_once failed")),
+            ("notes.txt", "run_once\n"),
+        ]);
+        let got = retrieve(
+            &issue(1, "Pool", "`run_once` in data/events.txt"),
+            &repo,
+            None,
+        )
+        .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].path, "data/events.txt");
+        assert_eq!(got[0].ranges, [(120, 180)]);
+    }
+
+    #[test]
+    fn test_files_are_recognized() {
+        for path in [
+            "tests/a.rs",
+            "crates/x/test/a.py",
+            "web/__tests__/a.js",
+            "spec/a.rb",
+            "src/testdata/a.go",
+            "src/fixtures/a.json",
+            "test_pool.py",
+            "src/pool_test.go",
+            "src/pool.test.ts",
+            "src/pool_spec.rb",
+            "src/pool.spec.js",
+            "src/PoolTest.java",
+            "src/PoolTests.cs",
+            "src/pool/tests.rs",
+        ] {
+            assert!(is_test_file(path), "{path}");
+        }
+        for path in [
+            "src/pool.rs",
+            "src/contest.rs",
+            "src/testing.rs",
+            "attest/a.rs",
+        ] {
+            assert!(!is_test_file(path), "{path}");
+        }
     }
 
     #[test]
@@ -896,7 +1031,7 @@ mod tests {
             .mount(&server)
             .await;
         let mut client = Client::new(&server.uri(), None, "m").unwrap();
-        let run = run(&mut report, &snapshot, &prepared, &mut client, 2).await;
+        let run = run(&mut report, &snapshot, &prepared, &mut client, 2, false).await;
 
         assert_eq!(
             (run.calls, run.still_valid, run.cant_tell, run.left),
@@ -933,7 +1068,7 @@ mod tests {
             .mount(&server)
             .await;
         let mut client = Client::new(&server.uri(), None, "m").unwrap();
-        let again = self::run(&mut next, &snapshot, &prepared, &mut client, 2).await;
+        let again = self::run(&mut next, &snapshot, &prepared, &mut client, 2, false).await;
         assert_eq!((again.calls, again.left, again.stopped), (1, 0, None));
         assert_eq!(next.summary.issues.still_valid, 2);
     }
@@ -963,7 +1098,7 @@ mod tests {
             .mount(&server)
             .await;
         let mut client = Client::new(&server.uri(), None, "m").unwrap();
-        let run = run(&mut report, &snapshot, &prepared, &mut client, 200).await;
+        let run = run(&mut report, &snapshot, &prepared, &mut client, 200, false).await;
         assert_eq!((run.calls, run.left, run.failed.len()), (1, 2, 1));
         assert_eq!(
             run.stopped.as_deref(),
