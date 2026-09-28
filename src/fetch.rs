@@ -402,6 +402,10 @@ pub struct PullCommit {
     /// Who made it: the committer's login, or the author's for commits GitHub made on the web
     /// ("Update branch", web edits). `None` when that email has no GitHub account.
     pub by: Option<String>,
+    /// Author date (kept by rebases).
+    pub authored_at: DateTime<Utc>,
+    /// The author's login; `None` when that email has no GitHub account.
+    pub author: Option<String>,
 }
 
 /// A review or comment on a PR.
@@ -468,6 +472,7 @@ query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: In
           nodes {
             commit {
               committedDate
+              authoredDate
               author { user { login } }
               committer { email user { login } }
               statusCheckRollup { state }
@@ -546,6 +551,7 @@ struct CommitWrapper {
 #[serde(rename_all = "camelCase")]
 struct HeadCommit {
     committed_date: DateTime<Utc>,
+    authored_date: DateTime<Utc>,
     author: Option<GitActor>,
     committer: Option<GitActor>,
     status_check_rollup: Option<Rollup>,
@@ -567,10 +573,17 @@ impl HeadCommit {
             .committer
             .as_ref()
             .is_some_and(|c| c.user.is_none() && c.email.as_deref() == Some(WEB_COMMITTER_EMAIL));
-        let maker = if web { self.author } else { self.committer };
+        let login = |actor: Option<GitActor>| actor.and_then(|a| a.user).map(|u| u.login);
+        let author = login(self.author);
         PullCommit {
             at: self.committed_date,
-            by: maker.and_then(|m| m.user).map(|u| u.login),
+            by: if web {
+                author.clone()
+            } else {
+                login(self.committer)
+            },
+            authored_at: self.authored_date,
+            author,
         }
     }
 }
@@ -1463,18 +1476,18 @@ mod tests {
                 "mergeable": "CONFLICTING",
                 "commits": { "nodes": [
                     { "commit": {
-                        "committedDate": "2025-12-01T00:00:00Z",
+                        "committedDate": "2025-12-01T00:00:00Z", "authoredDate": "2025-12-01T00:00:00Z",
                         "author": { "user": { "login": "alice" } },
                         "committer": { "email": "alice@example.com", "user": { "login": "alice" } },
                         "statusCheckRollup": { "state": "SUCCESS" } } },
                     // "Update branch": GitHub commits it for the user who clicked.
                     { "commit": {
-                        "committedDate": "2025-12-02T00:00:00Z",
+                        "committedDate": "2025-12-02T00:00:00Z", "authoredDate": "2025-12-02T00:00:00Z",
                         "author": { "user": { "login": "carol" } },
                         "committer": { "email": "noreply@github.com", "user": null },
                         "statusCheckRollup": null } },
                     { "commit": {
-                        "committedDate": "2026-01-02T00:00:00Z",
+                        "committedDate": "2026-01-02T00:00:00Z", "authoredDate": "2026-01-02T00:00:00Z",
                         "author": { "user": { "login": "alice" } },
                         "committer": { "email": "x@example.com", "user": null },
                         "statusCheckRollup": { "state": "FAILURE" } } }
@@ -1505,7 +1518,7 @@ mod tests {
             json!([{
                 "number": 5, "isDraft": true, "author": null, "mergeable": "UNKNOWN",
                 "commits": { "nodes": [{ "commit": {
-                    "committedDate": "2026-02-01T00:00:00Z", "author": null, "committer": null,
+                    "committedDate": "2026-02-01T00:00:00Z", "authoredDate": "2026-02-01T00:00:00Z", "author": null, "committer": null,
                     "statusCheckRollup": null } }] },
                 "reviews": { "nodes": [] },
                 "comments": { "nodes": [] },
@@ -1533,14 +1546,20 @@ mod tests {
                     PullCommit {
                         at: "2025-12-01T00:00:00Z".parse().unwrap(),
                         by: Some("alice".into()),
+                        authored_at: "2025-12-01T00:00:00Z".parse().unwrap(),
+                        author: Some("alice".into()),
                     },
                     PullCommit {
                         at: "2025-12-02T00:00:00Z".parse().unwrap(),
                         by: Some("carol".into()),
+                        authored_at: "2025-12-02T00:00:00Z".parse().unwrap(),
+                        author: Some("carol".into()),
                     },
                     PullCommit {
                         at: "2026-01-02T00:00:00Z".parse().unwrap(),
                         by: None,
+                        authored_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+                        author: Some("alice".into()),
                     },
                 ],
                 checks: Some(CheckState::Failure),

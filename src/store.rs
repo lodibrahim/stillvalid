@@ -567,6 +567,8 @@ mod tests {
             commits: vec![PullCommit {
                 at: ts("2027-05-01T00:00:00Z"),
                 by: Some("alice".into()),
+                authored_at: ts("2027-05-01T00:00:00Z"),
+                author: Some("alice".into()),
             }],
             checks: Some(CheckState::Success),
             ..idle.clone()

@@ -156,8 +156,9 @@ pub(crate) fn short_sha(sha: &str) -> &str {
 }
 
 /// Latest of: PR opened, author's own comments and reviews, and the last commits the author
-/// made. A commit made by someone else (a maintainer's rebase or "Update branch") is not the
-/// author's; one whose maker or PR author is unknown is counted.
+/// made (committer date) or wrote (author date, which survives a maintainer's rebase). A commit
+/// made by someone else ("Update branch", a rebase) doesn't count at its new date; one whose
+/// maker or PR author is unknown does.
 fn last_author_activity(pull: &Pull, activity: &PullActivity) -> DateTime<Utc> {
     let own_posts = activity
         .comments
@@ -168,8 +169,12 @@ fn last_author_activity(pull: &Pull, activity: &PullActivity) -> DateTime<Utc> {
     let own_commits = activity
         .commits
         .iter()
-        .filter(|c| activity.author.is_none() || c.by.is_none() || is_author(activity, &c.by))
-        .map(|c| c.at);
+        .flat_map(|c| {
+            let made = activity.author.is_none() || c.by.is_none() || is_author(activity, &c.by);
+            let wrote = is_author(activity, &c.author);
+            [made.then_some(c.at), wrote.then_some(c.authored_at)]
+        })
+        .flatten();
     own_posts
         .chain(own_commits)
         .fold(pull.created_at, DateTime::max)
@@ -256,6 +261,8 @@ mod tests {
         PullCommit {
             at: days_before_now(days_ago),
             by: Some(by.into()),
+            authored_at: days_before_now(days_ago),
+            author: Some(by.into()),
         }
     }
 
@@ -397,10 +404,23 @@ mod tests {
         // A commit whose email has no account may be the author's.
         let mut unknown = a.clone();
         unknown.commits.push(PullCommit {
-            at: days_before_now(1),
             by: None,
+            author: None,
+            ..commit("alice", 1)
         });
         assert_eq!(verdict(&p, &unknown), None);
+
+        // A maintainer's rebase keeps the author's own author dates.
+        let mut rebased = a.clone();
+        rebased.commits.push(PullCommit {
+            authored_at: days_before_now(10),
+            author: Some("alice".into()),
+            ..commit("maintainer", 1)
+        });
+        assert_eq!(verdict(&p, &rebased), None);
+        rebased.commits[1].authored_at = days_before_now(200);
+        let f = run(&p, &rebased).unwrap();
+        assert!(f.evidence[0].note.contains("(6 months ago)"));
     }
 
     #[test]
