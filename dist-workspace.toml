@@ -21,9 +21,12 @@ install-updater = false
 # publish-jobs): the formula is only attached to the release until the tap repo and its
 # HOMEBREW_TAP_TOKEN secret exist.
 tap = "lodibrahim/homebrew-tap"
+# Sign release artifacts with GitHub artifact attestations (`gh attestation verify`).
+github-attestations = true
 
 # Pin every action to a full commit SHA (repo rule; see .github/workflows/ci.yml).
 [dist.github-action-commits]
 "actions/checkout" = "3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
 "actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7.0.1
 "actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8.0.1
+"actions/attest" = "1e69f48acb82d1966a394da916b4c1698aa569d6" # v4.2.2

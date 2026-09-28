@@ -43,6 +43,8 @@ curl -sSf https://…/install.sh | sh     # any Unix
 stillvalid scan owner/repo --mode basic --html site
 ```
 
+Release archives carry GitHub build attestations; verify a download with `gh attestation verify <file> --repo lodibrahim/stillvalid`.
+
 ## Use in a repo
 
 Copy [examples/workflow.yml](examples/workflow.yml) to `.github/workflows/stillvalid.yml`:
