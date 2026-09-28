@@ -1,0 +1,30 @@
+# Dogfood: scan this repo nightly with the Action from the same commit (`uses: ./`)
+# and publish the dashboard to gh-pages (https://lodibrahim.github.io/stillvalid/stillvalid/).
+name: stillvalid
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: stillvalid-pages
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      # Only for `uses: ./`; the Action makes its own clone for the scan.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./
+        with:
+          mode: basic
+          publish-pages: "true"
+          labels: "false"
+          summary-issue: "false"

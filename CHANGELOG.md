@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Releases publish the `stillvalid` crate to crates.io with trusted publishing (no token), so `cargo install stillvalid` gets each new version.
+- This repo scans itself nightly with the Action; the dashboard is at <https://lodibrahim.github.io/stillvalid/stillvalid/>.
+
 ## 0.1.0 - 2026-09-28
 
 First release. `basic` mode only: heuristics, no AI.

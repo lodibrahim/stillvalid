@@ -15,6 +15,7 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [x] CI: `cargo fmt --check`, `cargo clippy`, `cargo test` on push
 - [x] `cargo dist init` (macOS x86_64/aarch64, Linux x86_64, Windows x86_64; shell + PowerShell installers; Homebrew tap)
 - [x] npm package on each release (dist npm installer, trusted publishing)
+- [x] crates.io publish on each release (trusted publishing)
 
 ### Core
 - [x] Fetcher: open issues/PRs via REST (`octocrab`), paginated, `GITHUB_TOKEN` / `gh auth token`
@@ -50,7 +51,7 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [x] Example workflow in `examples/`
 
 ### Validate
-- [ ] Dogfood on this repo
+- [x] Dogfood on this repo
 - [ ] Pilot on one mid-size OSS repo; hand-check 50 verdicts; publish precision
 - [ ] Measure first-scan cost and runtime
 - [ ] Pitch results to that project's maintainers
