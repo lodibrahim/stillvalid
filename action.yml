@@ -7,7 +7,7 @@ branding:
 
 inputs:
   mode:
-    description: "basic, or pro-ai (a model on any OpenAI-compatible endpoint; needs ai-model). free-ai ran on GitHub Models, which GitHub retired on 2026-07-30; it now runs basic"
+    description: "basic (recommended), or pro-ai (experimental, accuracy not measured; any OpenAI-compatible endpoint, needs ai-model and your own key). free-ai was retired with GitHub Models; it runs basic"
     default: basic
   branch:
     description: Branch where development happens (default = repo default branch)

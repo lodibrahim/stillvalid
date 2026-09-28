@@ -39,8 +39,8 @@ Nothing does "re-validate the whole backlog against current code, with evidence,
 | Verdict | Meaning | Example evidence |
 |---|---|---|
 | `likely_fixed` | Code or history shows it was addressed | Commit abc123 changed the function named in the issue |
-| `still_valid` | Described behavior is still possible in current code | `src/pool.rs:142` still skips release on timeout |
-| `duplicate` | Same problem as another issue | Same stack trace as #3288 |
+| `still_valid` (`pro-ai` only) | Described behavior is still possible in current code | `src/pool.rs:142` still skips release on timeout |
+| `duplicate` (planned) | Same problem as another issue | Same stack trace as #3288 |
 | `needs_info` | Not enough to judge | No repro steps, version, or matching code |
 | `cant_tell` | Some signal, no conclusion | Left for a human |
 
@@ -48,7 +48,7 @@ Nothing does "re-validate the whole backlog against current code, with evidence,
 
 | Verdict | Meaning | Example evidence |
 |---|---|---|
-| `still_applies` | Rebases cleanly, still relevant | Clean merge-tree against main |
+| `still_applies` (planned) | Rebases cleanly, still relevant | Clean merge-tree against main |
 | `superseded` | Its change already exists on main | Identical diff landed in 91b0f3e |
 | `conflicts` | Touches files rewritten since | 12 of 19 files changed on main |
 | `abandoned` | No author activity, failing checks | Inactive 9 months |
@@ -102,11 +102,13 @@ Store per item: hash of issue body/comments, list of related files + their blob 
 
 | Mode | Needs | Uses |
 |---|---|---|
-| `basic` (default) | nothing | Tier 1 only |
-| `pro-ai` | an OpenAI-compatible endpoint (`--ai-base-url`, `--ai-model`, key in `STILLVALID_API_KEY` if needed) | Tier 1 + Tier 2 with any provider (OpenAI, Anthropic's compatibility endpoint, OpenRouter, local Ollama / llama.cpp) |
+| `basic` (default, recommended) | nothing | Tier 1 only |
+| `pro-ai` (experimental) | an OpenAI-compatible endpoint (`--ai-base-url`, `--ai-model`, key in `STILLVALID_API_KEY` if needed) | Tier 1 + Tier 2 with any provider (OpenAI, Anthropic's compatibility endpoint, OpenRouter, local Ollama / llama.cpp) |
 | `free-ai` | nothing | Was Tier 1 + GitHub Models via `GITHUB_TOKEN`. GitHub retired GitHub Models on 2026-07-30, so it prints a warning and runs `basic` |
 
 Self-hosted runners can point `pro-ai` at a local model for zero per-call cost; that is the free option now.
+
+`pro-ai` is experimental and not promoted: the pitch is PR triage plus fixed-but-forgotten issues, which `basic` covers (see [DECISIONS.md](DECISIONS.md), 2026-09-28; precision in [PILOT.md](PILOT.md)).
 
 ## 6. Outputs (where people see it)
 
