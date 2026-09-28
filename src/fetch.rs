@@ -382,8 +382,8 @@ pub struct PullActivity {
     /// PR author's login; `None` for deleted accounts.
     pub author: Option<String>,
     pub mergeable: Mergeable,
-    /// Committer date of the head commit (set by new commits and rebases, not by pushing).
-    pub head_committed_at: Option<DateTime<Utc>>,
+    /// The last `COMMITS_PER_PULL` commits, oldest first (the head commit last).
+    pub commits: Vec<PullCommit>,
     /// Combined status of the head commit's checks; `None` when it has none.
     pub checks: Option<CheckState>,
     /// Submitted reviews (last `POSTS_PER_PULL`), including the author's replies.
@@ -394,10 +394,22 @@ pub struct PullActivity {
     pub changed_files: Option<Vec<String>>,
 }
 
+/// One of a PR's last commits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PullCommit {
+    /// Committer date (set by new commits and rebases, not by pushing).
+    pub at: DateTime<Utc>,
+    /// Who made it: the committer's login, or the author's for commits GitHub made on the web
+    /// ("Update branch", web edits). `None` when that email has no GitHub account.
+    pub by: Option<String>,
+}
+
 /// A review or comment on a PR.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Post {
     pub author: Option<String>,
+    /// Posted by a GitHub App or other bot account.
+    pub bot: bool,
     pub association: Association,
     pub at: DateTime<Utc>,
 }
@@ -437,11 +449,13 @@ pub enum Association {
 /// PRs per GraphQL page, and reviews/comments per PR (posts past the cap are not fetched).
 const PULLS_PER_PAGE: u32 = 50;
 const POSTS_PER_PULL: u32 = 20;
+/// Last commits per PR, to find the author's own latest one.
+const COMMITS_PER_PULL: u32 = 5;
 /// Changed files per PR; PRs with more have no `changed_files`.
 const FILES_PER_PULL: u64 = 100;
 
 const PULL_ACTIVITY_QUERY: &str = r#"
-query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: Int!, $files: Int!) {
+query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: Int!, $commits: Int!, $files: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: $pulls, after: $cursor) {
       pageInfo { hasNextPage endCursor }
@@ -450,9 +464,18 @@ query($owner: String!, $name: String!, $cursor: String, $pulls: Int!, $posts: In
         isDraft
         author { login }
         mergeable
-        commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
-        reviews(last: $posts) { nodes { author { login } authorAssociation submittedAt } }
-        comments(last: $posts) { nodes { author { login } authorAssociation createdAt } }
+        commits(last: $commits) {
+          nodes {
+            commit {
+              committedDate
+              author { user { login } }
+              committer { email user { login } }
+              statusCheckRollup { state }
+            }
+          }
+        }
+        reviews(last: $posts) { nodes { author { __typename login } authorAssociation submittedAt } }
+        comments(last: $posts) { nodes { author { __typename login } authorAssociation createdAt } }
         files(first: $files) { totalCount nodes { path } }
       }
     }
@@ -523,7 +546,33 @@ struct CommitWrapper {
 #[serde(rename_all = "camelCase")]
 struct HeadCommit {
     committed_date: DateTime<Utc>,
+    author: Option<GitActor>,
+    committer: Option<GitActor>,
     status_check_rollup: Option<Rollup>,
+}
+
+/// A commit's author or committer; `user` is the GitHub account its email belongs to.
+#[derive(Deserialize)]
+struct GitActor {
+    email: Option<String>,
+    user: Option<Login>,
+}
+
+/// Committer email of commits GitHub makes itself (web edits, "Update branch", merges).
+const WEB_COMMITTER_EMAIL: &str = "noreply@github.com";
+
+impl HeadCommit {
+    fn into_commit(self) -> PullCommit {
+        let web = self
+            .committer
+            .as_ref()
+            .is_some_and(|c| c.user.is_none() && c.email.as_deref() == Some(WEB_COMMITTER_EMAIL));
+        let maker = if web { self.author } else { self.committer };
+        PullCommit {
+            at: self.committed_date,
+            by: maker.and_then(|m| m.user).map(|u| u.login),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -535,18 +584,32 @@ struct Rollup {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PostNode {
-    author: Option<Login>,
+    author: Option<Actor>,
     author_association: Association,
     #[serde(alias = "createdAt")]
     submitted_at: Option<DateTime<Utc>>,
+}
+
+/// A GraphQL `Actor`: a user, bot, or other account.
+#[derive(Deserialize)]
+struct Actor {
+    #[serde(rename = "__typename")]
+    typename: String,
+    login: String,
 }
 
 fn into_posts(nodes: Vec<PostNode>) -> Vec<Post> {
     nodes
         .into_iter()
         .filter_map(|n| {
+            // Bots' logins end in "[bot]" over REST but not always over GraphQL.
+            let bot = n
+                .author
+                .as_ref()
+                .is_some_and(|a| a.typename == "Bot" || a.login.ends_with("[bot]"));
             Some(Post {
                 author: n.author.map(|a| a.login),
+                bot,
                 association: n.author_association,
                 at: n.submitted_at?,
             })
@@ -556,13 +619,20 @@ fn into_posts(nodes: Vec<PostNode>) -> Vec<Post> {
 
 impl PullActivityNode {
     fn into_activity(self) -> PullActivity {
-        let head = self.commits.nodes.into_iter().next().map(|c| c.commit);
+        let mut commits = self.commits.nodes;
+        let checks = commits
+            .last_mut()
+            .and_then(|c| c.commit.status_check_rollup.take())
+            .map(|r| r.state);
         PullActivity {
             draft: self.is_draft,
             author: self.author.map(|a| a.login),
             mergeable: self.mergeable,
-            head_committed_at: head.as_ref().map(|h| h.committed_date),
-            checks: head.and_then(|h| h.status_check_rollup).map(|r| r.state),
+            commits: commits
+                .into_iter()
+                .map(|c| c.commit.into_commit())
+                .collect(),
+            checks,
             reviews: into_posts(self.reviews.nodes),
             comments: into_posts(self.comments.nodes),
             changed_files: self
@@ -760,6 +830,7 @@ impl Fetcher {
                     "cursor": cursor,
                     "pulls": PULLS_PER_PAGE,
                     "posts": POSTS_PER_PULL,
+                    "commits": COMMITS_PER_PULL,
                     "files": FILES_PER_PULL,
                 },
             });
@@ -1359,19 +1430,38 @@ mod tests {
             json!([{
                 "number": 4, "isDraft": false, "author": { "login": "alice" },
                 "mergeable": "CONFLICTING",
-                "commits": { "nodes": [{ "commit": {
-                    "committedDate": "2026-01-02T00:00:00Z",
-                    "statusCheckRollup": { "state": "FAILURE" } } }] },
+                "commits": { "nodes": [
+                    { "commit": {
+                        "committedDate": "2025-12-01T00:00:00Z",
+                        "author": { "user": { "login": "alice" } },
+                        "committer": { "email": "alice@example.com", "user": { "login": "alice" } },
+                        "statusCheckRollup": { "state": "SUCCESS" } } },
+                    // "Update branch": GitHub commits it for the user who clicked.
+                    { "commit": {
+                        "committedDate": "2025-12-02T00:00:00Z",
+                        "author": { "user": { "login": "carol" } },
+                        "committer": { "email": "noreply@github.com", "user": null },
+                        "statusCheckRollup": null } },
+                    { "commit": {
+                        "committedDate": "2026-01-02T00:00:00Z",
+                        "author": { "user": { "login": "alice" } },
+                        "committer": { "email": "x@example.com", "user": null },
+                        "statusCheckRollup": { "state": "FAILURE" } } }
+                ] },
                 "reviews": { "nodes": [
-                    { "author": { "login": "bob" }, "authorAssociation": "MEMBER",
-                      "submittedAt": "2026-01-03T00:00:00Z" },
+                    { "author": { "__typename": "User", "login": "bob" },
+                      "authorAssociation": "MEMBER", "submittedAt": "2026-01-03T00:00:00Z" },
                     // Pending review: no submittedAt, dropped.
-                    { "author": { "login": "bob" }, "authorAssociation": "MEMBER",
-                      "submittedAt": null }
+                    { "author": { "__typename": "User", "login": "bob" },
+                      "authorAssociation": "MEMBER", "submittedAt": null }
                 ] },
                 "comments": { "nodes": [
                     { "author": null, "authorAssociation": "FIRST_TIME_CONTRIBUTOR",
-                      "createdAt": "2026-01-04T00:00:00Z" }
+                      "createdAt": "2026-01-04T00:00:00Z" },
+                    { "author": { "__typename": "Bot", "login": "codecov" },
+                      "authorAssociation": "NONE", "createdAt": "2026-01-05T00:00:00Z" },
+                    { "author": { "__typename": "User", "login": "renovate[bot]" },
+                      "authorAssociation": "NONE", "createdAt": "2026-01-06T00:00:00Z" }
                 ] },
                 "files": { "totalCount": 2, "nodes": [{ "path": "src/a.rs" }, { "path": "README.md" }] }
             }]),
@@ -1384,7 +1474,8 @@ mod tests {
             json!([{
                 "number": 5, "isDraft": true, "author": null, "mergeable": "UNKNOWN",
                 "commits": { "nodes": [{ "commit": {
-                    "committedDate": "2026-02-01T00:00:00Z", "statusCheckRollup": null } }] },
+                    "committedDate": "2026-02-01T00:00:00Z", "author": null, "committer": null,
+                    "statusCheckRollup": null } }] },
                 "reviews": { "nodes": [] },
                 "comments": { "nodes": [] },
                 "files": { "totalCount": 101, "nodes": [{ "path": "src/a.rs" }] }
@@ -1407,18 +1498,47 @@ mod tests {
                 draft: false,
                 author: Some("alice".into()),
                 mergeable: Mergeable::Conflicting,
-                head_committed_at: Some("2026-01-02T00:00:00Z".parse().unwrap()),
+                commits: vec![
+                    PullCommit {
+                        at: "2025-12-01T00:00:00Z".parse().unwrap(),
+                        by: Some("alice".into()),
+                    },
+                    PullCommit {
+                        at: "2025-12-02T00:00:00Z".parse().unwrap(),
+                        by: Some("carol".into()),
+                    },
+                    PullCommit {
+                        at: "2026-01-02T00:00:00Z".parse().unwrap(),
+                        by: None,
+                    },
+                ],
                 checks: Some(CheckState::Failure),
                 reviews: vec![Post {
                     author: Some("bob".into()),
+                    bot: false,
                     association: Association::Member,
                     at: "2026-01-03T00:00:00Z".parse().unwrap(),
                 }],
-                comments: vec![Post {
-                    author: None,
-                    association: Association::Other,
-                    at: "2026-01-04T00:00:00Z".parse().unwrap(),
-                }],
+                comments: vec![
+                    Post {
+                        author: None,
+                        bot: false,
+                        association: Association::Other,
+                        at: "2026-01-04T00:00:00Z".parse().unwrap(),
+                    },
+                    Post {
+                        author: Some("codecov".into()),
+                        bot: true,
+                        association: Association::Other,
+                        at: "2026-01-05T00:00:00Z".parse().unwrap(),
+                    },
+                    Post {
+                        author: Some("renovate[bot]".into()),
+                        bot: true,
+                        association: Association::Other,
+                        at: "2026-01-06T00:00:00Z".parse().unwrap(),
+                    },
+                ],
                 changed_files: Some(vec!["src/a.rs".into(), "README.md".into()]),
             }
         );
@@ -1426,6 +1546,7 @@ mod tests {
         assert!(draft.draft && draft.author.is_none());
         assert_eq!(draft.mergeable, Mergeable::Unknown);
         assert_eq!(draft.checks, None);
+        assert_eq!(draft.commits[0].by, None);
         assert_eq!(draft.changed_files, None);
     }
 

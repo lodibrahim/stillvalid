@@ -194,7 +194,7 @@ mod tests {
                     draft: true,
                     author: Some("alice".into()),
                     mergeable: Mergeable::Unknown,
-                    head_committed_at: None,
+                    commits: vec![],
                     checks: None,
                     reviews: vec![],
                     comments: vec![],

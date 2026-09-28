@@ -155,7 +155,9 @@ pub(crate) fn short_sha(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
-/// Latest of: PR opened, head commit pushed, author's own comments and reviews.
+/// Latest of: PR opened, author's own comments and reviews, and the last commits the author
+/// made. A commit made by someone else (a maintainer's rebase or "Update branch") is not the
+/// author's; one whose maker or PR author is unknown is counted.
 fn last_author_activity(pull: &Pull, activity: &PullActivity) -> DateTime<Utc> {
     let own_posts = activity
         .comments
@@ -163,19 +165,25 @@ fn last_author_activity(pull: &Pull, activity: &PullActivity) -> DateTime<Utc> {
         .chain(&activity.reviews)
         .filter(|p| is_author(activity, &p.author))
         .map(|p| p.at);
+    let own_commits = activity
+        .commits
+        .iter()
+        .filter(|c| activity.author.is_none() || c.by.is_none() || c.by == activity.author)
+        .map(|c| c.at);
     own_posts
-        .chain(activity.head_committed_at)
+        .chain(own_commits)
         .fold(pull.created_at, DateTime::max)
 }
 
-/// Someone other than the author submitted a review, or a maintainer commented.
+/// Someone other than the author submitted a review, or a maintainer commented. Bots don't count.
 fn reviewed(activity: &PullActivity) -> bool {
     activity
         .reviews
         .iter()
-        .any(|r| !is_author(activity, &r.author))
+        .any(|r| !r.bot && !is_author(activity, &r.author))
         || activity.comments.iter().any(|c| {
-            !is_author(activity, &c.author)
+            !c.bot
+                && !is_author(activity, &c.author)
                 && matches!(
                     c.association,
                     Association::Owner | Association::Member | Association::Collaborator
@@ -202,7 +210,7 @@ pub(crate) fn ago(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::{Post, PullBase, PullHead};
+    use crate::fetch::{Post, PullBase, PullCommit, PullHead};
 
     fn ts(s: &str) -> DateTime<Utc> {
         s.parse().unwrap()
@@ -236,7 +244,7 @@ mod tests {
             draft: false,
             author: Some("alice".into()),
             mergeable: Mergeable::Mergeable,
-            head_committed_at: Some(days_before_now(pushed_days_ago)),
+            commits: vec![commit("alice", pushed_days_ago)],
             checks: Some(CheckState::Success),
             reviews: vec![],
             comments: vec![],
@@ -244,9 +252,17 @@ mod tests {
         }
     }
 
+    fn commit(by: &str, days_ago: i64) -> PullCommit {
+        PullCommit {
+            at: days_before_now(days_ago),
+            by: Some(by.into()),
+        }
+    }
+
     fn post(author: &str, association: Association, days_ago: i64) -> Post {
         Post {
             author: Some(author.into()),
+            bot: false,
             association,
             at: days_before_now(days_ago),
         }
@@ -341,7 +357,7 @@ mod tests {
         let (p, a) = failing(300);
 
         let mut pushed = a.clone();
-        pushed.head_committed_at = Some(days_before_now(179));
+        pushed.commits.push(commit("alice", 179));
         assert_eq!(verdict(&p, &pushed), None);
 
         let mut commented = a.clone();
@@ -363,11 +379,38 @@ mod tests {
     }
 
     #[test]
+    fn only_the_authors_commits_count_as_activity() {
+        let (p, a) = failing(300);
+
+        // A maintainer's rebase or "Update branch" doesn't keep the PR alive.
+        let mut updated = a.clone();
+        updated.commits.push(commit("maintainer", 1));
+        let f = run(&p, &updated).unwrap();
+        assert_eq!(f.verdict, Verdict::Abandoned);
+        assert!(f.evidence[0].note.contains("(10 months ago)"));
+
+        // The author's own commit before it still does.
+        let mut earlier = updated.clone();
+        earlier.commits.insert(1, commit("alice", 10));
+        assert_eq!(verdict(&p, &earlier), None);
+
+        // A commit whose email has no account may be the author's.
+        let mut unknown = a.clone();
+        unknown.commits.push(PullCommit {
+            at: days_before_now(1),
+            by: None,
+        });
+        assert_eq!(verdict(&p, &unknown), None);
+    }
+
+    #[test]
     fn deleted_author_uses_push_and_open_dates() {
         let (p, mut a) = failing(200);
         a.author = None;
+        a.commits = vec![commit("someone", 200)];
         a.comments.push(Post {
             author: None,
+            bot: false,
             association: Association::Other,
             at: days_before_now(1),
         });
@@ -436,6 +479,14 @@ mod tests {
             a.comments.push(post("bob", association, 10));
             assert_eq!(verdict(&p, &a), None, "{association:?}");
         }
+
+        // Bots' reviews and comments are not reviews.
+        let mut bots = activity(30);
+        let mut bot = post("codecov", Association::Member, 10);
+        bot.bot = true;
+        bots.reviews.push(bot.clone());
+        bots.comments.push(bot);
+        assert_eq!(verdict(&p, &bots), Some(Verdict::ReadyUnreviewed));
 
         // The author's own replies and drive-by comments are not reviews.
         let mut a = activity(30);
