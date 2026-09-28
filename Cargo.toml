@@ -1,6 +1,6 @@
 [package]
 name = "stillvalid"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "Checks whether open GitHub issues and pull requests are still valid against the current code, with evidence."
 license = "MIT OR Apache-2.0"
