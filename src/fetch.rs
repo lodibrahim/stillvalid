@@ -658,6 +658,16 @@ struct BranchCommit {
     sha: String,
 }
 
+/// A "Not Found" error on a `user` field: the account behind a commit email is gone. (octocrab
+/// drops GitHub's `type: NOT_FOUND`, so the message is what's left to match.)
+fn gone_user(error: &octocrab::GraphqlError) -> bool {
+    error.message == "Not Found"
+        && matches!(
+            error.path.as_deref().and_then(<[_]>::last),
+            Some(octocrab::GraphqlPathSegment::Path(field)) if field == "user"
+        )
+}
+
 pub fn split_repo(repo: &str) -> Result<(&str, &str), FetchError> {
     match repo.split_once('/') {
         Some((owner, name)) if !owner.is_empty() && !name.is_empty() && !name.contains('/') => {
@@ -813,6 +823,27 @@ impl Fetcher {
         }
     }
 
+    /// Like `Octocrab::graphql`, but accepts a partial result whose only errors are accounts that
+    /// no longer exist: GitHub answers `NOT_FOUND` for a commit's `user` then and leaves it null.
+    async fn graphql_allowing_gone_users<R: serde::de::DeserializeOwned>(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<R, FetchError> {
+        let response: octocrab::GraphqlResponse<R> =
+            self.gh.post("/graphql", Some(payload)).await?;
+        match response {
+            octocrab::GraphqlResponse::Ok(ok) => Ok(ok.data),
+            octocrab::GraphqlResponse::Err(err) => match err.data {
+                Some(data) if err.errors.iter().all(gone_user) => Ok(data),
+                _ => Err(octocrab::Error::Graphql {
+                    source: err.errors.into(),
+                    backtrace: std::backtrace::Backtrace::capture(),
+                }
+                .into()),
+            },
+        }
+    }
+
     /// Page through open PRs' activity via GraphQL.
     async fn pull_activity(
         &self,
@@ -834,7 +865,7 @@ impl Fetcher {
                     "files": FILES_PER_PULL,
                 },
             });
-            let data: PullsData = self.gh.graphql(&payload).await?;
+            let data: PullsData = self.graphql_allowing_gone_users(&payload).await?;
             let pulls = data.repository.pull_requests;
             for pull in pulls.nodes {
                 out.insert(pull.number, pull.into_activity());
@@ -1581,6 +1612,54 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, FetchError::Api(_)));
+    }
+
+    #[tokio::test]
+    async fn partial_results_with_gone_users_are_accepted() {
+        let user = json!([
+            "repository",
+            "pullRequests",
+            "nodes",
+            0,
+            "commits",
+            "nodes",
+            0,
+            "commit",
+            "author",
+            "user"
+        ]);
+        let data = json!({ "repository": null });
+        for (body, ok) in [
+            (
+                json!({ "data": data, "errors": [{ "message": "Not Found", "path": user }] }),
+                true,
+            ),
+            // Other fields, other errors, or no data still fail.
+            (
+                json!({ "data": data, "errors": [{ "message": "Not Found", "path": ["repository"] }] }),
+                false,
+            ),
+            (
+                json!({ "data": data, "errors": [{ "message": "Something went wrong", "path": user }] }),
+                false,
+            ),
+            (
+                json!({ "data": null, "errors": [{ "message": "Not Found", "path": user }] }),
+                false,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/graphql"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+                .mount(&server)
+                .await;
+            let result: Result<serde_json::Value, _> = fetcher(&server)
+                .await
+                .graphql_allowing_gone_users(&json!({ "query": "{}" }))
+                .await;
+            assert_eq!(result.is_ok(), ok, "{body}");
+        }
     }
 
     #[tokio::test]
