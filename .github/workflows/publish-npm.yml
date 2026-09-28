@@ -1,5 +1,6 @@
 # Called by release.yml (dist custom publish job) after the GitHub Release exists.
-# npm trusted publishing, no token; see CONTRIBUTING "Releasing".
+# Stages the npm package with trusted publishing (no token); a maintainer approves
+# it on npmjs.com. See CONTRIBUTING "Releasing".
 name: publish-npm
 on:
   workflow_call:
@@ -24,13 +25,15 @@ jobs:
           pattern: artifacts-*
           path: npm/
           merge-multiple: true
-      # Trusted publishing needs npm >= 11.5.1 (Node 24 ships it).
+      # `npm stage publish` needs npm >= 11.15.0 (Node >= 24.18); check-latest skips an
+      # older Node 24 cached on the runner.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+          check-latest: true
           registry-url: 'https://registry.npmjs.org'
       - run: |
           for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith("-npm-package.tar.gz")] | any)'); do
             pkg=$(echo "$release" | jq '.artifacts[] | select(endswith("-npm-package.tar.gz"))' --raw-output)
-            npm publish --access public "./npm/${pkg}"
+            npm stage publish --access public --provenance "./npm/${pkg}"
           done
