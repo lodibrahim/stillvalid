@@ -19,6 +19,12 @@ jobs:
       - uses: lodibrahim/stillvalid@v1
         with:
           mode: basic
+          # AI check of issues the heuristics can't settle (any OpenAI-compatible endpoint):
+          # mode: pro-ai
+          # ai-model: gpt-4.1-mini
+          # api-key: ${{ secrets.OPENAI_API_KEY }}
+          # ai-base-url: https://api.openai.com/v1   # or e.g. https://api.anthropic.com/v1/
+          # max-llm-calls: "200"  # per run; the next run continues where this one stopped
           # branch: main          # default: the repo's default branch
           # labels: "true"        # verdict labels on issues/PRs (needs issues: write)
           # summary-issue: "true" # pinned "Backlog health" issue (needs issues: write)

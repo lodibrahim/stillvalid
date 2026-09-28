@@ -4,7 +4,8 @@
 //! commit on the branch says it fixes, or whose named code is gone, get `likely_fixed`; vague bug
 //! reports get `needs_info`; open PRs get the activity rules (`abandoned`, `ready_unreviewed`) and a
 //! local `git merge-tree` against the branch (`conflicts`, `superseded`); everything else is
-//! `cant_tell`. See docs/DESIGN.md and docs/ROADMAP.md.
+//! `cant_tell`. With `--mode pro-ai`, a model then checks the remaining issues against retrieved
+//! code (see `check::ai`). See docs/DESIGN.md and docs/ROADMAP.md.
 
 use anyhow::{Context, Result};
 use chrono::{SubsecRound, Utc};
@@ -12,9 +13,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;
 use stillvalid::check::pulls::PullThresholds;
-use stillvalid::check::{code, info, merge};
+use stillvalid::check::{ai, code, info, merge};
 use stillvalid::report::github;
-use stillvalid::{fetch, incremental, repo, report, store};
+use stillvalid::{fetch, incremental, llm, repo, report, store};
 
 #[derive(Parser)]
 #[command(
@@ -81,6 +82,18 @@ enum Command {
         /// With --labels / --summary-issue: print what would change on GitHub, write nothing
         #[arg(long)]
         dry_run: bool,
+
+        /// pro-ai: OpenAI-compatible API root (key from STILLVALID_API_KEY, if the server needs one)
+        #[arg(long, default_value = "https://api.openai.com/v1")]
+        ai_base_url: String,
+
+        /// pro-ai: model to ask, e.g. gpt-4.1-mini
+        #[arg(long)]
+        ai_model: Option<String>,
+
+        /// pro-ai: most model calls per run; the next run continues where this one stopped
+        #[arg(long, default_value_t = 200)]
+        max_llm_calls: usize,
     },
 }
 
@@ -88,9 +101,9 @@ enum Command {
 enum Mode {
     /// Heuristics only, no AI
     Basic,
-    /// Heuristics + GitHub Models via GITHUB_TOKEN (not built yet; runs basic)
+    /// Was GitHub Models, which GitHub retired on 2026-07-30; runs basic
     FreeAi,
-    /// Heuristics + your own LLM provider (not built yet; runs basic)
+    /// Heuristics + a model on any OpenAI-compatible endpoint (your key, or a local server)
     ProAi,
 }
 
@@ -112,17 +125,28 @@ async fn main() -> Result<()> {
             summary_issue,
             dashboard_url,
             dry_run,
+            ai_base_url,
+            ai_model,
+            max_llm_calls,
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
-            if !matches!(mode, Mode::Basic) {
-                let name = mode.to_possible_value().expect("no skipped variants");
-                eprintln!(
-                    "stillvalid: --mode {} is not built yet; running basic",
-                    name.get_name()
-                );
-            }
-            // Only basic is built; the AI modes run it too.
-            let mode = Mode::Basic;
+            let (mode, client) = match mode {
+                Mode::Basic => (mode, None),
+                Mode::FreeAi => {
+                    eprintln!(
+                        "stillvalid: GitHub Models was retired on 2026-07-30, so --mode free-ai has no model to call; running basic (use --mode pro-ai with your own key or a local model)"
+                    );
+                    (Mode::Basic, None)
+                }
+                Mode::ProAi => {
+                    let model = ai_model.context("--mode pro-ai needs --ai-model")?;
+                    let key = std::env::var("STILLVALID_API_KEY")
+                        .ok()
+                        .map(|k| k.trim().to_string())
+                        .filter(|k| !k.is_empty());
+                    (mode, Some(llm::Client::new(&ai_base_url, key, &model)?))
+                }
+            };
             // Read it before the long fetch so a bad file fails fast; a missing one means a first run.
             let previous = match previous {
                 Some(path) if !path.exists() => {
@@ -239,6 +263,23 @@ async fn main() -> Result<()> {
                 .blob_shas()
                 .with_context(|| format!("listing files at {}", local.head_sha))?;
             incremental::fill_fingerprints(&mut report, &snapshot, &blobs);
+            let mut ai = client.map(|client| {
+                let started = Instant::now();
+                let token = local.fetch_token(token.as_deref());
+                let prepared = ai::prepare(&mut report, &snapshot, &local, &blobs, token);
+                eprintln!(
+                    "stillvalid: found code for {} issues to ask the model about ({:.1}s)",
+                    prepared.excerpts.len(),
+                    started.elapsed().as_secs_f64(),
+                );
+                if let Some((number, err)) = prepared.failed.first() {
+                    eprintln!(
+                        "stillvalid: could not read code for {} issues (first: #{number}: {err})",
+                        prepared.failed.len()
+                    );
+                }
+                (client, prepared)
+            });
             if let Some(previous) = previous {
                 match incremental::check_previous(&previous, &report) {
                     Ok(()) => {
@@ -252,15 +293,38 @@ async fn main() -> Result<()> {
                     Err(e) => eprintln!("stillvalid: {e}; checking everything"),
                 }
             }
+            if let Some((client, prepared)) = &mut ai {
+                let started = Instant::now();
+                let run = ai::run(&mut report, &snapshot, prepared, client, max_llm_calls).await;
+                eprintln!(
+                    "stillvalid: model: {} calls ({} likely_fixed, {} still_valid, {} cant_tell), {} issues left for the next run ({:.1}s)",
+                    run.calls,
+                    run.likely_fixed,
+                    run.still_valid,
+                    run.cant_tell,
+                    run.left,
+                    started.elapsed().as_secs_f64(),
+                );
+                if let Some(reason) = &run.stopped {
+                    eprintln!("stillvalid: stopped model calls: {reason}");
+                }
+                if let Some((number, err)) = run.failed.first() {
+                    eprintln!(
+                        "stillvalid: {} model calls failed (first: #{number}: {err})",
+                        run.failed.len()
+                    );
+                }
+            }
             store::write_report(&report, &out)?;
             eprintln!(
-                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed, {} needs_info; {} PRs abandoned, {} ready_unreviewed, {} conflicts, {} superseded)",
+                "stillvalid: wrote {} ({} issues, {} PRs, {} issues referenced by PRs/commits; {} issues got a verdict: {} likely_fixed, {} still_valid, {} needs_info; {} PRs abandoned, {} ready_unreviewed, {} conflicts, {} superseded)",
                 out.display(),
                 report.summary.issues.open,
                 report.summary.pulls.open,
                 snapshot.references.len(),
                 report.summary.issues.open - report.summary.issues.cant_tell,
                 report.summary.issues.likely_fixed,
+                report.summary.issues.still_valid,
                 report.summary.issues.needs_info,
                 report.summary.pulls.abandoned,
                 report.summary.pulls.ready_unreviewed,

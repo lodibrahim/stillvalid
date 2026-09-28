@@ -2,7 +2,7 @@
 
 **Is that issue still valid?** `stillvalid` checks every open GitHub issue and pull request against the current code and tells you which ones are already fixed, still real, duplicated, or dead — with evidence.
 
-> **Status: early release (v0.1.0).** `basic` mode only; the AI modes are coming soon. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early release (v0.1.0).** `basic` mode is complete; `pro-ai` (bring your own model) is new and not yet measured against a real model. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 **Live example:** [this repo's dashboard](https://lodibrahim.github.io/stillvalid/stillvalid/) [![stillvalid](https://img.shields.io/endpoint?url=https://lodibrahim.github.io/stillvalid/stillvalid/badge.json)](https://lodibrahim.github.io/stillvalid/stillvalid/), updated nightly by [`.github/workflows/stillvalid.yml`](.github/workflows/stillvalid.yml). It goes live once GitHub Pages is enabled for this repo.
 
@@ -67,7 +67,7 @@ jobs:
           mode: basic
 ```
 
-Each run installs the released binary (`version`, default `latest`), scans, and commits `report.json`, `index.html` and `badge.json` to `stillvalid/` on the `gh-pages` branch (created on the first run; no commit when nothing changed). The next run reads that `report.json` as its previous report. Inputs: `mode`, `branch`, `version`, `publish-pages` (default `true`), `labels` and `summary-issue` (default `false`, need `issues: write`).
+Each run installs the released binary (`version`, default `latest`), scans, and commits `report.json`, `index.html` and `badge.json` to `stillvalid/` on the `gh-pages` branch (created on the first run; no commit when nothing changed). The next run reads that `report.json` as its previous report. Inputs: `mode`, `branch`, `version`, `publish-pages` (default `true`), `labels` and `summary-issue` (default `false`, need `issues: write`), and for `pro-ai`: `ai-model`, `api-key`, `ai-base-url`, `max-llm-calls`.
 
 To see the dashboard, turn on Pages once: **Settings → Pages → Build and deployment → Deploy from a branch**, branch `gh-pages`, folder `/ (root)`. It is then at `https://<owner>.github.io/<repo>/stillvalid/`. The link in the "Backlog health" issue assumes that address, so it won't match a custom Pages domain.
 
@@ -88,8 +88,15 @@ stillvalid scan owner/repo --labels --summary-issue --dry-run   # print what wou
 | Mode | Needs | What it can tell you |
 |---|---|---|
 | `basic` (default) | Nothing | Linked PR merged, referenced files deleted, PR conflicts, PR change already on main |
-| `free-ai` (coming soon) | Nothing — GitHub Models via the built-in token | `basic` + "does this bug still exist in the code?" |
-| `pro-ai` (coming soon) | Your own LLM API key | Same, more accurate, larger scale |
+| `pro-ai` | A model on any OpenAI-compatible endpoint: your API key (OpenAI, Anthropic, OpenRouter, ...) or a local server (Ollama, llama.cpp) | `basic` + "does this issue still hold in the code?" (`still_valid` / `likely_fixed`, each citing `file:line`) |
+| `free-ai` | — | Ran on GitHub Models, which GitHub [retired on 2026-07-30](https://github.blog/changelog/2026-07-30-github-models-is-now-retired/); now runs `basic` |
+
+```sh
+STILLVALID_API_KEY=sk-... stillvalid scan owner/repo --mode pro-ai --ai-model gpt-4.1-mini
+stillvalid scan owner/repo --mode pro-ai --ai-base-url http://localhost:11434/v1 --ai-model qwen2.5-coder:7b   # Ollama, no key
+```
+
+`pro-ai` asks the model only about issues the heuristics leave at "can't tell", shows it the matching code at the scanned commit, and keeps an answer only if every line it cites is in that code; model verdicts are never `high` confidence (`likely_fixed` is always `low`). At most `--max-llm-calls` (default 200) calls per run, most-reacted issues first; on a rate limit it stops and the next run with `--previous` continues where it stopped.
 
 ## Docs
 

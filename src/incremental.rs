@@ -55,7 +55,7 @@ pub fn fill_fingerprints(
     }
 }
 
-fn related<'a>(
+pub(crate) fn related<'a>(
     paths: impl Iterator<Item = &'a str>,
     blobs: &HashMap<String, String>,
 ) -> BTreeMap<String, String> {

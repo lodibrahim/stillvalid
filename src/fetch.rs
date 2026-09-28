@@ -37,6 +37,14 @@ pub struct Issue {
     /// Number of comments.
     #[serde(default)]
     pub comments: u64,
+    #[serde(default)]
+    pub reactions: Reactions,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Reactions {
+    #[serde(default)]
+    pub total_count: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

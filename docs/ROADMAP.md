@@ -2,7 +2,7 @@
 
 ## MVP (v0.1)
 
-A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dashboard.
+A CLI + Action that runs `basic` and `pro-ai` modes and publishes a static dashboard.
 
 **In scope:** issue + PR verdicts with evidence, `report.json`, one HTML dashboard, labels, pinned summary, incremental re-checks.
 **Out of scope for now:** sandbox reproduction, per-issue comments, Projects board, non-GitHub trackers.
@@ -34,11 +34,12 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [x] PR: diff already on main → `superseded`
 - [x] PR: inactivity + checks → `abandoned` / `ready_unreviewed`
 
-### Tier 2 (`free-ai`)
-- [ ] GitHub Models client (OpenAI-compatible endpoint, `models: read`)
-- [ ] Retrieval of relevant code snippets
-- [ ] Structured JSON prompt; validate cited `file:line` exist; drop bad answers to `cant_tell`
-- [ ] Rate-limit aware, resumable across runs
+### Tier 2 (`pro-ai`; `free-ai` dropped: GitHub Models was retired 2026-07-30)
+- [x] OpenAI-compatible client (base URL + key + model), replacing the planned GitHub Models client
+- [x] Retrieval of relevant code snippets
+- [x] Structured JSON prompt; validate cited `file:line` exist; drop bad answers to `cant_tell`
+- [x] Rate-limit aware, resumable across runs
+- [ ] Measure precision against a real model (only mocked so far)
 
 ### Outputs
 - [x] Dashboard HTML (embedded template) — summary tiles, verdict breakdown bar, Issues/PRs tabs, verdict filters, table with evidence
