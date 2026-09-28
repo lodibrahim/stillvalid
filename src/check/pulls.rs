@@ -168,7 +168,7 @@ fn last_author_activity(pull: &Pull, activity: &PullActivity) -> DateTime<Utc> {
     let own_commits = activity
         .commits
         .iter()
-        .filter(|c| activity.author.is_none() || c.by.is_none() || c.by == activity.author)
+        .filter(|c| activity.author.is_none() || c.by.is_none() || is_author(activity, &c.by))
         .map(|c| c.at);
     own_posts
         .chain(own_commits)

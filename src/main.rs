@@ -115,12 +115,14 @@ async fn main() -> Result<()> {
         } => {
             let (owner, name) = fetch::split_repo(&repo)?;
             if !matches!(mode, Mode::Basic) {
-                let mode = mode.to_possible_value().expect("no skipped variants");
+                let name = mode.to_possible_value().expect("no skipped variants");
                 eprintln!(
                     "stillvalid: --mode {} is not built yet; running basic",
-                    mode.get_name()
+                    name.get_name()
                 );
             }
+            // Only basic is built; the AI modes run it too.
+            let mode = Mode::Basic;
             // Read it before the long fetch so a bad file fails fast; a missing one means a first run.
             let previous = match previous {
                 Some(path) if !path.exists() => {
@@ -219,14 +221,14 @@ async fn main() -> Result<()> {
                 );
             }
 
+            let mode = mode.to_possible_value().expect("no skipped variants");
             let thresholds = PullThresholds {
                 abandoned_after_days,
                 unreviewed_after_days,
             };
             let mut report = store::build_report(
                 &snapshot,
-                // Only basic is built; the AI modes run it too.
-                "basic",
+                mode.get_name(),
                 now,
                 &thresholds,
                 &checks.findings,

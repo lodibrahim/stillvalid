@@ -619,10 +619,10 @@ fn into_posts(nodes: Vec<PostNode>) -> Vec<Post> {
 
 impl PullActivityNode {
     fn into_activity(self) -> PullActivity {
-        let mut commits = self.commits.nodes;
+        let commits = self.commits.nodes;
         let checks = commits
-            .last_mut()
-            .and_then(|c| c.commit.status_check_rollup.take())
+            .last()
+            .and_then(|c| c.commit.status_check_rollup.as_ref())
             .map(|r| r.state);
         PullActivity {
             draft: self.is_draft,
