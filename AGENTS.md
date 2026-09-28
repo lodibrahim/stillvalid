@@ -8,12 +8,13 @@ Read this first, then `docs/DESIGN.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md`.
 
 `stillvalid` checks every open GitHub issue and PR against the current code and outputs a **verdict + confidence + evidence** per item (e.g. "likely fixed — PR #2977 added the check at `src/compaction.rs:88`"). It ships as a Rust CLI and a GitHub Action, has no server, and publishes results as labels, a pinned summary issue, and a static GitHub Pages dashboard.
 
-## Current state (2026-09-27)
+## Current state (2026-09-28)
 
-- Design complete; docs in `docs/`.
-- `scan` fetches open issues/PRs (`src/fetch.rs`) and writes `report.json` (`src/store.rs`). No checks yet, so every verdict is `cant_tell`.
-- `action.yml` is a draft; it assumes release binaries that don't exist yet.
-- Next work: the "Setup" and "Core" sections of `docs/ROADMAP.md`.
+- Preparing v0.1.0 (not released yet). `basic` mode is complete; `free-ai` / `pro-ai` are not built and run `basic`.
+- `scan` fetches issues/PRs (`src/fetch.rs`), clones the repo (`src/repo.rs`), runs the Tier 1 checks (`src/check/`), and writes `report.json` (`src/store.rs`, incremental via `--previous`).
+- Outputs: dashboard + badge (`--html`), opt-in labels and "Backlog health" issue (`src/report/`).
+- `action.yml` installs the release binary and publishes to `gh-pages`; releases are built by dist (`.github/workflows/release.yml`, see CONTRIBUTING "Releasing").
+- Next work: Tier 2 (`free-ai`) and "Validate" in `docs/ROADMAP.md`.
 
 ## Non-negotiables
 
@@ -33,7 +34,7 @@ docs/DECISIONS.md           decision log
 docs/ROADMAP.md             MVP task list
 schema/report.example.json  output contract
 examples/                   workflow + config examples
-action.yml                  GitHub Action (draft)
+action.yml                  GitHub Action
 ```
 
 Planned modules: `fetch` (GitHub API), `index` (code + references), `check` (heuristics, llm), `store` (report.json, incremental), `report` (html, labels, summary, badge).
