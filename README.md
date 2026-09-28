@@ -2,7 +2,7 @@
 
 **Is that issue still valid?** `stillvalid` checks every open GitHub issue and pull request against the current code and tells you which ones are already fixed, still real, duplicated, or dead — with evidence.
 
-> **Status: pre-alpha / design stage.** The CLI skeleton compiles but does not scan yet. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early release (v0.1.0).** `basic` mode only; the AI modes are coming soon. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why
 
@@ -81,9 +81,9 @@ stillvalid scan owner/repo --labels --summary-issue --dry-run   # print what wou
 
 | Mode | Needs | What it can tell you |
 |---|---|---|
-| `basic` | Nothing | Linked PR merged, referenced files deleted, PR conflicts, PR change already on main |
-| `free-ai` (default) | Nothing — GitHub Models via the built-in token | `basic` + "does this bug still exist in the code?" |
-| `pro-ai` | Your own LLM API key | Same, more accurate, larger scale |
+| `basic` (default) | Nothing | Linked PR merged, referenced files deleted, PR conflicts, PR change already on main |
+| `free-ai` (coming soon) | Nothing — GitHub Models via the built-in token | `basic` + "does this bug still exist in the code?" |
+| `pro-ai` (coming soon) | Your own LLM API key | Same, more accurate, larger scale |
 
 ## Docs
 
