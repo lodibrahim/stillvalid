@@ -36,6 +36,8 @@ Single native binary for macOS, Linux and Windows, no runtime needed:
 brew install stillvalid                 # macOS / Linux
 winget install stillvalid               # Windows
 cargo install stillvalid                # from source
+npm install -g stillvalid               # any OS with Node.js; downloads the release binary
+npx stillvalid scan owner/repo          # run once without installing
 curl -sSf https://…/install.sh | sh     # any Unix
 ```
 

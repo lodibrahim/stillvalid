@@ -13,4 +13,5 @@ First release. `basic` mode only: heuristics, no AI.
 - GitHub Action `lodibrahim/stillvalid@v1`: installs the release, scans, and publishes the report to `gh-pages`.
 - `--mode free-ai` / `pro-ai` are accepted but not built yet; they run `basic`.
 - Prebuilt binaries for macOS (x86_64, aarch64), Linux x86_64, and Windows x86_64, with shell and PowerShell installers.
+- npm package `stillvalid` (`npm install -g stillvalid` or `npx stillvalid`), which downloads the release binary; published with npm provenance.
 - Release archives have GitHub artifact attestations: `gh attestation verify <file> --repo lodibrahim/stillvalid`.

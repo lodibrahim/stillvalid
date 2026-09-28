@@ -14,6 +14,7 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - [ ] Claim GitHub org `stillvalid`; check `stillvalid.dev`; quick trademark search
 - [x] CI: `cargo fmt --check`, `cargo clippy`, `cargo test` on push
 - [x] `cargo dist init` (macOS x86_64/aarch64, Linux x86_64, Windows x86_64; shell + PowerShell installers; Homebrew tap)
+- [x] npm package on each release (dist npm installer, trusted publishing)
 
 ### Core
 - [x] Fetcher: open issues/PRs via REST (`octocrab`), paginated, `GITHUB_TOKEN` / `gh auth token`
@@ -58,6 +59,6 @@ A CLI + Action that runs `basic` and `free-ai` modes and publishes a static dash
 - `pro-ai` providers (Anthropic, OpenAI, OpenAI-compatible/Ollama), model escalation
 - Duplicate detection with CPU embeddings
 - GitHub Projects fields, sticky comments
-- winget / Scoop / npm wrapper
+- winget / Scoop
 - Tier 3 sandbox reproduction
 - GitLab / Gitea support
