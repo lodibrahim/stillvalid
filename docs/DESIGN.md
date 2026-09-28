@@ -1,6 +1,6 @@
 # stillvalid — Design
 
-Last updated: 2026-09-27
+Last updated: 2026-09-28
 
 ## 1. Problem
 
@@ -84,11 +84,13 @@ GitHub API ─► Fetcher ─► Indexer ─► Checker ─► Store ─► Repo
 - PR: author inactivity + check status → abandoned / ready_unreviewed
 - Duplicate candidates via title/body similarity (optional small CPU embedding model)
 
-**Tier 2 — retrieval + LLM (`free-ai` / `pro-ai`):**
-- Retrieve relevant code for the issue (Indexer references + keyword/embedding search)
-- Ask: "Given this issue and this code, is the described behavior still possible? Cite lines."
-- Response must be structured JSON with verdict, confidence, and `file:line` citations; reject answers whose citations don't exist
-- Small/cheap model screens; stronger model only for uncertain items
+**Tier 2 — retrieval + LLM (`pro-ai`, built; `src/check/ai.rs`, `src/llm.rs`):**
+- Only open issues still `cant_tell` after Tier 1; PRs stay heuristic-only
+- Retrieve relevant code at `head_sha`, no embeddings: files the issue names (+10), `git grep` hits of its symbols and error strings (+5 each), identifiers and `--flag` names from its text (+3), and title words (+1, any case); source files only unless named. Top 4 files, ±30 lines around hits, at most 120 lines per file and ~24k characters in all; the issue text is cut at 6k characters. These files (with blob SHAs) are the item's `related_files`
+- Ask: "Given this issue and this code, is the described behavior still possible? Cite lines." Structured JSON (`response_format` `json_schema`, falling back to `json_object`): verdict (`likely_fixed` / `still_valid` / `cant_tell`), confidence, reason, citations `[{path, line}]`
+- Keep the answer only if it cites at least one line and every cited line is inside the excerpts shown (so it exists at `head_sha`); otherwise `cant_tell`. Evidence = the cited `file:line`s, the reason as note, tier `llm`. Confidence: `likely_fixed` always `low`, `still_valid` at most `medium`
+- Order: most reactions, then most comments, then newest; at most `--max-llm-calls` (200) calls. A `429` with `retry-after` ≤ 60 s is waited out once; a longer or repeated one, a refused key, `x-ratelimit-remaining-requests: 0`, or 5 failures in a row stop calls. The scan never fails on AI errors; unreached issues stay `cant_tell` (tier `none`), and the next run reuses this run's answers and continues with them
+- Later: small/cheap model screens; stronger model only for uncertain items
 
 **Tier 3 — reproduction (later, optional):** run repro steps in a sandbox, write a failing test.
 
@@ -101,10 +103,10 @@ Store per item: hash of issue body/comments, list of related files + their blob 
 | Mode | Needs | Uses |
 |---|---|---|
 | `basic` (default) | nothing | Tier 1 only |
-| `free-ai` (coming soon) | nothing | Tier 1 + GitHub Models via `GITHUB_TOKEN` (`models: read`); rate-limited, so large repos are scanned over several nights |
-| `pro-ai` (coming soon) | API key secret | Tier 1 + any provider (Anthropic, OpenAI, OpenAI-compatible/local e.g. Ollama) |
+| `pro-ai` | an OpenAI-compatible endpoint (`--ai-base-url`, `--ai-model`, key in `STILLVALID_API_KEY` if needed) | Tier 1 + Tier 2 with any provider (OpenAI, Anthropic's compatibility endpoint, OpenRouter, local Ollama / llama.cpp) |
+| `free-ai` | nothing | Was Tier 1 + GitHub Models via `GITHUB_TOKEN`. GitHub retired GitHub Models on 2026-07-30, so it prints a warning and runs `basic` |
 
-Self-hosted runners can point `pro-ai` at a local model for zero per-call cost.
+Self-hosted runners can point `pro-ai` at a local model for zero per-call cost; that is the free option now.
 
 ## 6. Outputs (where people see it)
 
@@ -159,7 +161,8 @@ The repo running it pays, never the tool author.
 - Heuristics settle many items with no AI call.
 - Incremental: nightly runs touch only changed items.
 - Cheap model screens, strong model escalates.
-- `free-ai` uses GitHub Models' free tier (confirm current limits).
+- `pro-ai` caps calls per run (`--max-llm-calls`, default 200); about 7k input tokens and at most 400 output tokens per call. A local model costs nothing per call.
+- There is no free hosted tier: GitHub Models, the planned `free-ai` backend, was retired on 2026-07-30.
 - Large projects: sponsorship funds or AI-vendor OSS credits.
 
 Open question: measure real first-scan cost on a ~3,000-issue repo during the pilot.
@@ -170,6 +173,6 @@ Open question: measure real first-scan cost on a ~3,000-issue repo during the pi
 |---|---|
 | Wrong "likely fixed" verdicts erode trust | Evidence required; citation validation; read-only; publish precision from pilot |
 | GitHub API rate limits on big repos | GraphQL batching, incremental runs, resumable scans |
-| GitHub Models limits change | `basic` mode always works; `pro-ai` fallback |
+| AI provider limits or shutdowns (GitHub Models was retired 2026-07-30) | `basic` mode always works; `pro-ai` takes any OpenAI-compatible endpoint, including a local model |
 | Maintainers dislike bots | Labels/dashboard default; comments opt-in |
 | Name clash | `stillvalid` free on crates.io, npm, GitHub org, Homebrew as of 2026-09-27; trademark search still to do |

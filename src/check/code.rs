@@ -161,7 +161,7 @@ fn is_checked(r: &Reference) -> bool {
     }
 }
 
-fn is_code_file(path: &str) -> bool {
+pub(super) fn is_code_file(path: &str) -> bool {
     path.rsplit_once('.')
         .is_some_and(|(_, ext)| !NON_CODE_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
 }
@@ -169,7 +169,7 @@ fn is_code_file(path: &str) -> bool {
 /// The file at `base` that `path` names: the path itself, the path without a diff's `a/` or
 /// `b/` prefix, or for an absolute path the one file at `base` ending in at least its last two
 /// components.
-fn resolve_path(
+pub(super) fn resolve_path(
     repo: &Repo,
     base: &str,
     path: &str,
@@ -283,7 +283,7 @@ fn string_gone(
 }
 
 /// The last `::` or `.` segment of a symbol: `grep_searcher::LineStep` → `LineStep`.
-fn symbol_needle(symbol: &str) -> &str {
+pub(super) fn symbol_needle(symbol: &str) -> &str {
     symbol.rsplit([':', '.']).next().unwrap_or(symbol)
 }
 

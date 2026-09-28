@@ -10,11 +10,11 @@ Read this first, then `docs/DESIGN.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md`.
 
 ## Current state (2026-09-28)
 
-- Preparing v0.1.0 (not released yet). `basic` mode is complete; `free-ai` / `pro-ai` are not built and run `basic`.
+- v0.1.0 released. `basic` mode is complete; `pro-ai` asks a model on any OpenAI-compatible endpoint about issues still `cant_tell` (`src/check/ai.rs`, `src/llm.rs`); `free-ai` runs `basic` (GitHub Models was retired 2026-07-30).
 - `scan` fetches issues/PRs (`src/fetch.rs`), clones the repo (`src/repo.rs`), runs the Tier 1 checks (`src/check/`), and writes `report.json` (`src/store.rs`, incremental via `--previous`).
 - Outputs: dashboard + badge (`--html`), opt-in labels and "Backlog health" issue (`src/report/`).
 - `action.yml` installs the release binary and publishes to `gh-pages`; releases are built by dist (`.github/workflows/release.yml`, see CONTRIBUTING "Releasing").
-- Next work: Tier 2 (`free-ai`) and "Validate" in `docs/ROADMAP.md`.
+- Next work: measure `pro-ai` precision on a real model, and "Validate" in `docs/ROADMAP.md`.
 
 ## Non-negotiables
 

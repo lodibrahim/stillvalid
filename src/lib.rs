@@ -6,6 +6,7 @@ pub mod check;
 pub mod fetch;
 pub mod incremental;
 pub mod index;
+pub mod llm;
 pub mod repo;
 pub mod report;
 pub mod store;

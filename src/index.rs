@@ -30,7 +30,7 @@ const MAX_ERROR_LEN: usize = 200;
 const TRAILING_PUNCT: [char; 6] = ['.', ',', ':', ';', '!', '?'];
 
 /// Extensions accepted for a bare `name.ext` with no directory part.
-const CODE_EXTS: &[&str] = &[
+pub(crate) const CODE_EXTS: &[&str] = &[
     "rs", "py", "pyi", "js", "mjs", "cjs", "jsx", "ts", "tsx", "go", "java", "kt", "scala", "c",
     "h", "cc", "cpp", "hpp", "cs", "rb", "php", "swift", "sh", "bash", "zsh", "ps1", "toml", "yml",
     "yaml", "json", "md", "txt", "lock", "cfg", "ini", "conf", "xml", "html", "css", "scss", "sql",
@@ -67,7 +67,8 @@ const NOISE_SYMBOLS: &[&str] = &[
     "kotlin.",
 ];
 
-static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"https?://[^\s)\]>"'`]+"#).unwrap());
+pub(crate) static URL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"https?://[^\s)\]>"'`]+"#).unwrap());
 static BLOB_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^https?://github\.com/[^/]+/[^/]+/blob/[^/]+/([^#?]+)(?:\?[^#]*)?(?:#L(\d+))?")
         .unwrap()
@@ -78,7 +79,7 @@ static LINE_SUFFIX: LazyLock<Regex> =
 static CODE_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
 static IDENT_PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z_]\w*(?:(?:::|\.)[A-Za-z_]\w*)*(?:\(\))?$").unwrap());
-static CAMEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z][A-Z]").unwrap());
+pub(crate) static CAMEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z][A-Z]").unwrap());
 
 static RUST_FRAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d+:\s+(?:0x[0-9a-fA-F]+ - )?(<.+>\S*|\S+)$").unwrap());

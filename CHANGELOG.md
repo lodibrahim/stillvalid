@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `--mode pro-ai`: issues the heuristics leave at `cant_tell` are checked by a model on any OpenAI-compatible endpoint (`--ai-base-url`, `--ai-model`, key in `STILLVALID_API_KEY`) against code retrieved at the scanned commit. Answers count only when every cited `file:line` is in the code shown; `still_valid` is at most medium confidence, `likely_fixed` always low. `--max-llm-calls` (default 200) caps calls per run; rate limits stop calls cleanly and the next run continues.
+- `--mode free-ai` now says GitHub Models was retired (2026-07-30) and runs `basic`.
 - Releases publish the `stillvalid` crate to crates.io with trusted publishing (no token), so `cargo install stillvalid` gets each new version.
 - This repo scans itself nightly with the Action; the dashboard is at <https://lodibrahim.github.io/stillvalid/stillvalid/>.
 

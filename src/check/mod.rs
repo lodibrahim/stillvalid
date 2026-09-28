@@ -3,6 +3,7 @@
 
 use crate::store::{Confidence, Evidence};
 
+pub mod ai;
 pub mod code;
 pub mod info;
 pub mod issues;

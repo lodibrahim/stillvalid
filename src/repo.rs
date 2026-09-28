@@ -370,19 +370,66 @@ impl Repo {
         word: bool,
         token: Option<&str>,
     ) -> Result<Option<(String, u32)>, RepoError> {
-        let mut args = vec!["grep", "-z", "-n", "-I", "-F", "-e", needle];
+        let first = self.grep_all(rev, &[needle], word, false, 1, token)?;
+        Ok(first.into_iter().next().map(|(path, line, _)| (path, line)))
+    }
+
+    /// Every line at `rev` containing any of `needles` as a fixed string (as whole words with
+    /// `word`, any case with `ignore_case`), at most `per_file` lines per file, skipping binary
+    /// files: `(path, line, text)`.
+    pub fn grep_all(
+        &self,
+        rev: &str,
+        needles: &[&str],
+        word: bool,
+        ignore_case: bool,
+        per_file: u32,
+        token: Option<&str>,
+    ) -> Result<Vec<(String, u32, String)>, RepoError> {
+        if needles.is_empty() {
+            return Ok(Vec::new());
+        }
+        let max = per_file.to_string();
+        let mut args = vec!["grep", "-z", "-n", "-I", "-F", "-m", &max];
         if word {
             args.push("-w");
+        }
+        if ignore_case {
+            args.push("-i");
+        }
+        for needle in needles {
+            args.extend(["-e", needle]);
         }
         args.extend([rev, "--"]);
         // Exit 1 means no match. Each match: `<rev>:<path>\0<line>\0<text>\n`.
         let out = git_output(Some(&self.path), &args, token, &[0, 1], None)?;
-        let mut fields = out.split('\0');
-        let path = fields
-            .next()
-            .and_then(|p| p.strip_prefix(&format!("{rev}:")));
-        let line = fields.next().and_then(|l| l.parse().ok());
-        Ok(path.zip(line).map(|(p, l)| (p.to_string(), l)))
+        let prefix = format!("{rev}:");
+        Ok(out
+            .lines()
+            .filter_map(|l| {
+                let mut fields = l.splitn(3, '\0');
+                let path = fields.next()?.strip_prefix(&prefix)?;
+                let line = fields.next()?.parse().ok()?;
+                Some((path.to_string(), line, fields.next()?.to_string()))
+            })
+            .collect())
+    }
+
+    /// The contents of `path` at `rev`.
+    pub fn read_file(
+        &self,
+        rev: &str,
+        path: &str,
+        token: Option<&str>,
+    ) -> Result<String, RepoError> {
+        let spec = format!("{rev}:{path}");
+        git_output(
+            Some(&self.path),
+            &["cat-file", "-p", &spec],
+            token,
+            &[0],
+            None,
+        )
     }
 
     /// The last first-parent commit in `from..head_sha` whose diff adds or removes a line

@@ -7,14 +7,23 @@ branding:
 
 inputs:
   mode:
-    description: basic (free-ai and pro-ai are not built yet)
+    description: "basic, or pro-ai (a model on any OpenAI-compatible endpoint; needs ai-model). free-ai ran on GitHub Models, which GitHub retired on 2026-07-30; it now runs basic"
     default: basic
   branch:
     description: Branch where development happens (default = repo default branch)
     default: ""
   api-key:
-    description: LLM API key, for pro-ai mode once it exists (unused today)
+    description: "pro-ai: API key for the endpoint (pass it from a secret)"
     default: ""
+  ai-base-url:
+    description: "pro-ai: OpenAI-compatible API root"
+    default: https://api.openai.com/v1
+  ai-model:
+    description: "pro-ai: model to ask, e.g. gpt-4.1-mini"
+    default: ""
+  max-llm-calls:
+    description: "pro-ai: most model calls per run; the next run continues where this one stopped"
+    default: "200"
   version:
     description: stillvalid release to use, `latest` or a tag such as v0.1.0
     default: latest
@@ -95,6 +104,9 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
         STILLVALID_API_KEY: ${{ inputs.api-key }}
         MODE: ${{ inputs.mode }}
+        AI_BASE_URL: ${{ inputs.ai-base-url }}
+        AI_MODEL: ${{ inputs.ai-model }}
+        MAX_LLM_CALLS: ${{ inputs.max-llm-calls }}
         BRANCH: ${{ inputs.branch }}
         LABELS: ${{ inputs.labels }}
         SUMMARY_ISSUE: ${{ inputs.summary-issue }}
@@ -106,6 +118,12 @@ runs:
         args=(scan "$GITHUB_REPOSITORY" --mode "$MODE" --out "$SITE_DIR/report.json" --html "$SITE_DIR")
         if [ -n "$BRANCH" ]; then
           args+=(--branch "$BRANCH")
+        fi
+        if [ "$MODE" = "pro-ai" ]; then
+          args+=(--ai-base-url "$AI_BASE_URL" --max-llm-calls "$MAX_LLM_CALLS")
+          if [ -n "$AI_MODEL" ]; then
+            args+=(--ai-model "$AI_MODEL")
+          fi
         fi
         if [ -f "$PAGES_DIR/stillvalid/report.json" ]; then
           args+=(--previous "$PAGES_DIR/stillvalid/report.json")
