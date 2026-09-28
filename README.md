@@ -96,7 +96,7 @@ STILLVALID_API_KEY=sk-... stillvalid scan owner/repo --mode pro-ai --ai-model gp
 stillvalid scan owner/repo --mode pro-ai --ai-base-url http://localhost:11434/v1 --ai-model qwen2.5-coder:7b   # Ollama, no key
 ```
 
-`pro-ai` asks the model only about issues the heuristics leave at "can't tell", shows it the matching code at the scanned commit, and keeps an answer only if every line it cites is in that code; model verdicts are never `high` confidence (`likely_fixed` is always `low`). At most `--max-llm-calls` (default 200) calls per run, most-reacted issues first; on a rate limit it stops and the next run with `--previous` continues where it stopped.
+`pro-ai` asks the model only about issues the heuristics leave at "can't tell", shows it the matching code at the scanned commit, and keeps an answer only if every line it cites is in that code; model verdicts are never `high` confidence (`likely_fixed` is always `low`). At most `--max-llm-calls` (default 200) calls per run, most-reacted issues first; on a rate limit it stops and the next run with `--previous` continues where it stopped. `--ai-debug` (or `STILLVALID_AI_DEBUG=1`) prints each raw model answer to stderr.
 
 ## Docs
 

@@ -370,13 +370,14 @@ impl Repo {
         word: bool,
         token: Option<&str>,
     ) -> Result<Option<(String, u32)>, RepoError> {
-        let first = self.grep_all(rev, &[needle], word, false, 1, token)?;
+        let first = self.grep_all(rev, &[needle], word, false, 1, &[], token)?;
         Ok(first.into_iter().next().map(|(path, line, _)| (path, line)))
     }
 
     /// Every line at `rev` containing any of `needles` as a fixed string (as whole words with
     /// `word`, any case with `ignore_case`), at most `per_file` lines per file, skipping binary
-    /// files: `(path, line, text)`.
+    /// files, in files matching `pathspecs` (all files when empty): `(path, line, text)`.
+    #[allow(clippy::too_many_arguments)]
     pub fn grep_all(
         &self,
         rev: &str,
@@ -384,6 +385,7 @@ impl Repo {
         word: bool,
         ignore_case: bool,
         per_file: u32,
+        pathspecs: &[String],
         token: Option<&str>,
     ) -> Result<Vec<(String, u32, String)>, RepoError> {
         if needles.is_empty() {
@@ -401,6 +403,7 @@ impl Repo {
             args.extend(["-e", needle]);
         }
         args.extend([rev, "--"]);
+        args.extend(pathspecs.iter().map(String::as_str));
         // Exit 1 means no match. Each match: `<rev>:<path>\0<line>\0<text>\n`.
         let out = git_output(Some(&self.path), &args, token, &[0, 1], None)?;
         let prefix = format!("{rev}:");
