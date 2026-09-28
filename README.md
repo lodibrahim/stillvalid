@@ -1,8 +1,8 @@
 # stillvalid
 
-**Is that issue still valid?** `stillvalid` checks every open GitHub issue and pull request against the current code and tells you which ones are already fixed, still real, duplicated, or dead — with evidence.
+**Backlog triage for pull requests, plus fixed-but-forgotten issues.** `stillvalid` checks every open PR against today's code and tells you which ones conflict, were abandoned, or already landed on main, and it finds open issues that a merged PR or commit already fixed. Every verdict comes with evidence.
 
-> **Status: early release (v0.1.0).** `basic` mode is complete; `pro-ai` (bring your own model) is new and not yet measured against a real model. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early release (v0.1.0).** `basic` mode is complete and is the recommended mode. `pro-ai` is experimental. See [Accuracy](#accuracy) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 **Live example:** [this repo's dashboard](https://lodibrahim.github.io/stillvalid/stillvalid/) [![stillvalid](https://img.shields.io/endpoint?url=https://lodibrahim.github.io/stillvalid/stillvalid/badge.json)](https://lodibrahim.github.io/stillvalid/stillvalid/), updated nightly by [`.github/workflows/stillvalid.yml`](.github/workflows/stillvalid.yml). It goes live once GitHub Pages is enabled for this repo.
 
@@ -18,7 +18,9 @@ For every open issue and PR, a **verdict + confidence + evidence** (a commit, a 
 
 | Issues | Pull requests |
 |---|---|
-| Likely fixed · Still valid · Duplicate · Needs info · Can't tell | Still applies · Superseded · Conflicts · Abandoned · Ready, unreviewed |
+| Likely fixed · Needs info · Can't tell | Superseded · Conflicts · Abandoned · Ready, unreviewed · Can't tell |
+
+"Still valid" comes only from `pro-ai` (experimental). "Duplicate" and "Still applies" are planned, not built.
 
 Results show up where people already look:
 
@@ -83,13 +85,24 @@ stillvalid scan owner/repo --labels --summary-issue --dry-run   # print what wou
 - `--labels` puts one `stillvalid: <verdict>` label on each issue and PR (none for "can't tell"), creates missing labels, and swaps it when the verdict changes. Other labels are never touched. Saved filter: `is:open label:"stillvalid: likely-fixed"`.
 - `--summary-issue` keeps one pinned "Backlog health" issue up to date: totals per verdict and the top likely-fixed issues with evidence. If a maintainer closes it, it stays closed.
 
+## Accuracy
+
+A hand check of 50 `basic` verdicts on [jesseduffield/lazygit](https://github.com/jesseduffield/lazygit) (2026-09-28, [docs/PILOT.md](docs/PILOT.md)):
+
+| Verdict | Right / checked |
+|---|---|
+| PR `conflicts` | 21 / 21 |
+| PR `abandoned` | 4 / 21 (none wrong; 17 debatable: the PR waits on the maintainer, not the author) |
+| Issue `likely_fixed` | 2 / 6 |
+| Issue `needs_info` | 2 / 2 |
+
 ## Modes
 
 | Mode | Needs | What it can tell you |
 |---|---|---|
-| `basic` (default) | Nothing | Linked PR merged, referenced files deleted, PR conflicts, PR change already on main |
-| `pro-ai` | A model on any OpenAI-compatible endpoint: your API key (OpenAI, Anthropic, OpenRouter, ...) or a local server (Ollama, llama.cpp) | `basic` + "does this issue still hold in the code?" (`still_valid` / `likely_fixed`, each citing `file:line`) |
-| `free-ai` | — | Ran on GitHub Models, which GitHub [retired on 2026-07-30](https://github.blog/changelog/2026-07-30-github-models-is-now-retired/); now runs `basic` |
+| `basic` (default, recommended) | Nothing | Linked PR merged, referenced files deleted, PR conflicts, PR change already on main |
+| `pro-ai` (experimental) | A model on any OpenAI-compatible endpoint: your API key (OpenAI, Anthropic, OpenRouter, ...) or a local server (Ollama, llama.cpp) | `basic` + "does this issue still hold in the code?" (`still_valid` / `likely_fixed`, each citing `file:line`). Accuracy not measured yet; bring your own key |
+| `free-ai` (retired) | — | Retired with GitHub Models, which GitHub [shut down on 2026-07-30](https://github.blog/changelog/2026-07-30-github-models-is-now-retired/); now runs `basic` |
 
 ```sh
 STILLVALID_API_KEY=sk-... stillvalid scan owner/repo --mode pro-ai --ai-model gpt-4.1-mini

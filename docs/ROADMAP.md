@@ -39,7 +39,7 @@ A CLI + Action that runs `basic` and `pro-ai` modes and publishes a static dashb
 - [x] Retrieval of relevant code snippets
 - [x] Structured JSON prompt; validate cited `file:line` exist; drop bad answers to `cant_tell`
 - [x] Rate-limit aware, resumable across runs
-- [ ] Measure precision against a real model (only mocked so far)
+- [ ] Measure precision against a real model (only mocked so far; deferred: `pro-ai` is experimental and not promoted)
 
 ### Outputs
 - [x] Dashboard HTML (embedded template) — summary tiles, verdict breakdown bar, Issues/PRs tabs, verdict filters, table with evidence
@@ -53,7 +53,7 @@ A CLI + Action that runs `basic` and `pro-ai` modes and publishes a static dashb
 
 ### Validate
 - [x] Dogfood on this repo
-- [ ] Pilot on one mid-size OSS repo; hand-check 50 verdicts; publish precision
+- [x] Pilot on one mid-size OSS repo; hand-check 50 verdicts; publish precision ([PILOT.md](PILOT.md))
 - [ ] Measure first-scan cost and runtime
 - [ ] Pitch results to that project's maintainers
 
