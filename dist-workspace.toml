@@ -8,7 +8,7 @@ cargo-dist-version = "0.33.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell", "homebrew"]
+installers = ["shell", "powershell", "homebrew", "npm"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
@@ -23,6 +23,10 @@ install-updater = false
 tap = "lodibrahim/homebrew-tap"
 # Sign release artifacts with GitHub artifact attestations (`gh attestation verify`).
 github-attestations = true
+# npm publish with trusted publishing (dist's builtin "npm" job needs a token);
+# see .github/workflows/publish-npm.yml.
+publish-jobs = ["./publish-npm"]
+github-custom-job-permissions = { "publish-npm" = { contents = "read", id-token = "write" } }
 
 # Pin every action to a full commit SHA (repo rule; see .github/workflows/ci.yml).
 [dist.github-action-commits]
