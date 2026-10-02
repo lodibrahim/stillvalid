@@ -8,7 +8,7 @@
   "branch": "main",
   "head_sha": "be27af830dcbbeed12f387e7281a4c8bda00e56d",
   "mode": "basic",
-  "scanned_at": "2026-10-01T11:00:24Z",
+  "scanned_at": "2026-10-02T10:33:21Z",
   "summary": {
     "issues": {
       "open": 2,
@@ -45,7 +45,7 @@
           "dist-workspace.toml": "blob:3e954041f583371cff73b6c8e087ce9c1dfdfa46"
         }
       },
-      "checked_at": "2026-10-01T11:00:24Z"
+      "checked_at": "2026-10-02T10:33:21Z"
     },
     {
       "kind": "issue",
@@ -61,7 +61,7 @@
         "body_hash": "sha256:df5c7a06c9cc76a77ad2c88f36fb27b66d9e6fe82c14e496749633a1e6d01520",
         "related_files": {}
       },
-      "checked_at": "2026-10-01T11:00:24Z"
+      "checked_at": "2026-10-02T10:33:21Z"
     }
   ]
 }
