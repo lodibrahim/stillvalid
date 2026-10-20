@@ -2,7 +2,7 @@
 
 **Backlog triage for pull requests, plus fixed-but-forgotten issues.** `stillvalid` checks every open PR against today's code and tells you which ones conflict, were abandoned, or already landed on main, and it finds open issues that a merged PR or commit already fixed. Every verdict comes with evidence.
 
-> **Status: early release (v0.1.0).** `basic` mode is complete and is the recommended mode. `pro-ai` is experimental. See [Accuracy](#accuracy) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early release (v0.2.0).** `basic` mode is complete and is the recommended mode. `pro-ai` is experimental. See [Accuracy](#accuracy) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 **Live example:** [this repo's dashboard](https://lodibrahim.github.io/stillvalid/stillvalid/) [![stillvalid](https://img.shields.io/endpoint?url=https://lodibrahim.github.io/stillvalid/stillvalid/badge.json)](https://lodibrahim.github.io/stillvalid/stillvalid/), updated nightly by [`.github/workflows/stillvalid.yml`](.github/workflows/stillvalid.yml). It goes live once GitHub Pages is enabled for this repo.
 
