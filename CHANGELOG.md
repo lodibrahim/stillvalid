@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-10-20
+
+- Security: rustls 0.23.46 (RUSTSEC-2026-0346, -0347, -0348, -0349), rustls-webpki 0.103.16 (RUSTSEC-2026-0382) and yoke-derive 0.8.4 (0.8.3 was yanked).
 
 - `--mode pro-ai`: issues the heuristics leave at `cant_tell` are checked by a model on any OpenAI-compatible endpoint (`--ai-base-url`, `--ai-model`, key in `STILLVALID_API_KEY`) against code retrieved at the scanned commit. Answers count only when every cited `file:line` is in the code shown; `still_valid` is at most medium confidence, `likely_fixed` always low. `--max-llm-calls` (default 200) caps calls per run; rate limits stop calls cleanly and the next run continues.
 - `pro-ai` fixes from the first real-model pilot: output budget 4096 tokens with `reasoning_effort: low` (dropped if the endpoint rejects it), since thinking tokens count against it and answers were cut off; a cut-off answer is reported and retried next run; `502`/`503`/`504` are retried twice; error messages show their cause and the endpoint's `error.message`; code retrieval greps only source and named files (64 s to 2 s on one repo) and shows at most one test file unless named; `--ai-debug` prints raw answers.
