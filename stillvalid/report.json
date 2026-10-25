@@ -8,7 +8,7 @@
   "branch": "main",
   "head_sha": "e2062ee8758d847e7d983b9a6a35aebbe15771d2",
   "mode": "basic",
-  "scanned_at": "2026-10-24T08:55:26Z",
+  "scanned_at": "2026-10-25T09:12:17Z",
   "summary": {
     "issues": {
       "open": 2,
@@ -45,7 +45,7 @@
           "dist-workspace.toml": "blob:3e954041f583371cff73b6c8e087ce9c1dfdfa46"
         }
       },
-      "checked_at": "2026-10-24T08:55:26Z"
+      "checked_at": "2026-10-25T09:12:17Z"
     },
     {
       "kind": "issue",
@@ -61,7 +61,26 @@
         "body_hash": "sha256:df5c7a06c9cc76a77ad2c88f36fb27b66d9e6fe82c14e496749633a1e6d01520",
         "related_files": {}
       },
-      "checked_at": "2026-10-24T08:55:26Z"
+      "checked_at": "2026-10-25T09:12:17Z"
+    },
+    {
+      "kind": "pull",
+      "number": 31,
+      "title": "Bump the actions group across 1 directory with 3 updates",
+      "url": "https://github.com/lodibrahim/stillvalid/pull/31",
+      "created_at": "2026-10-25T00:33:09Z",
+      "verdict": "cant_tell",
+      "confidence": "low",
+      "tier": "none",
+      "evidence": [],
+      "fingerprint": {
+        "related_files": {
+          ".github/workflows/publish-crates.yml": "blob:8cb3910579eb7febfc4989f042cc1b49f324b4ee",
+          ".github/workflows/publish-npm.yml": "blob:9e18d4f32acd225ff100ddc4fbc74f3004d71aab"
+        },
+        "head_sha": "e27d740cbcb411645ac7e15b6a4deeb74f749919"
+      },
+      "checked_at": "2026-10-25T09:12:17Z"
     },
     {
       "kind": "pull",
@@ -77,27 +96,9 @@
         "related_files": {
           "Cargo.lock": "blob:a80747f0b533fd49000012a42016619688f1f247"
         },
-        "head_sha": "6a248d68552fd878669de6d54ee78b376bf02489"
+        "head_sha": "b16ac95e4a5e7239fcbd5606714e7e802026f067"
       },
-      "checked_at": "2026-10-24T08:55:26Z"
-    },
-    {
-      "kind": "pull",
-      "number": 24,
-      "title": "Bump the actions group with 2 updates",
-      "url": "https://github.com/lodibrahim/stillvalid/pull/24",
-      "created_at": "2026-10-11T00:34:33Z",
-      "verdict": "cant_tell",
-      "confidence": "low",
-      "tier": "none",
-      "evidence": [],
-      "fingerprint": {
-        "related_files": {
-          ".github/workflows/publish-npm.yml": "blob:9e18d4f32acd225ff100ddc4fbc74f3004d71aab"
-        },
-        "head_sha": "5b76aecaf79785e438bcf3ca2138f66ebb06dd2b"
-      },
-      "checked_at": "2026-10-24T08:55:26Z"
+      "checked_at": "2026-10-25T09:12:17Z"
     }
   ]
 }
