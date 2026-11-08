@@ -101,7 +101,7 @@ footer { font-size: .85rem; padding-top: 2rem; padding-bottom: 2rem; }
 <body>
 <header>
 <h1>stillvalid <a href="https://github.com/lodibrahim/stillvalid">lodibrahim/stillvalid</a></h1>
-<p class="meta"><code>main</code> at <a href="https://github.com/lodibrahim/stillvalid/commit/e2062ee8758d847e7d983b9a6a35aebbe15771d2"><code>e2062ee</code></a> · basic mode · scanned <time datetime="2026-11-07T11:08:25+00:00">2026-11-07 11:08 UTC</time> · stillvalid 0.2.0</p>
+<p class="meta"><code>main</code> at <a href="https://github.com/lodibrahim/stillvalid/commit/e2062ee8758d847e7d983b9a6a35aebbe15771d2"><code>e2062ee</code></a> · basic mode · scanned <time datetime="2026-11-08T11:21:07+00:00">2026-11-08 11:21 UTC</time> · stillvalid 0.2.0</p>
 </header>
 <main>
 <section class="tiles" aria-label="Summary">
@@ -145,11 +145,13 @@ footer { font-size: .85rem; padding-top: 2rem; padding-bottom: 2rem; }
 </section>
 <section class="panel" id="pulls" role="tabpanel" aria-labelledby="tab-pulls">
 <h2>Pull requests</h2>
-<div class="bar" role="img" aria-label="Pull requests by verdict: 2 can't tell">
-<span class="v-cant_tell" style="flex-grow:2" title="Can't tell: 2"></span>
+<div class="bar" role="img" aria-label="Pull requests by verdict: 1 ready, unreviewed, 1 can't tell">
+<span class="v-ready_unreviewed" style="flex-grow:1" title="Ready, unreviewed: 1"></span>
+<span class="v-cant_tell" style="flex-grow:1" title="Can't tell: 1"></span>
 </div>
 <div class="filters" role="group" aria-label="Show pull requests by verdict">
-<button type="button" data-verdict="cant_tell" aria-pressed="true"><span class="dot v-cant_tell"></span>Can't tell <span class="n">2</span></button>
+<button type="button" data-verdict="ready_unreviewed" aria-pressed="true"><span class="dot v-ready_unreviewed"></span>Ready, unreviewed <span class="n">1</span></button>
+<button type="button" data-verdict="cant_tell" aria-pressed="true"><span class="dot v-cant_tell"></span>Can't tell <span class="n">1</span></button>
 <button type="button" class="reset">Show all</button>
 </div>
 <p class="shown" aria-live="polite">2 of 2 shown</p>
@@ -157,17 +159,17 @@ footer { font-size: .85rem; padding-top: 2rem; padding-bottom: 2rem; }
 <caption class="sr-only">Open pull requests</caption>
 <thead><tr><th scope="col">Pull request</th><th scope="col">Verdict</th><th scope="col">Evidence</th><th scope="col">Opened</th></tr></thead>
 <tbody>
+<tr data-verdict="ready_unreviewed">
+<td class="item"><a href="https://github.com/lodibrahim/stillvalid/pull/26">Bump the cargo group across 1 directory with 4 updates</a> <span class="num">#26</span></td>
+<td><span class="verdict"><span class="dot v-ready_unreviewed"></span>Ready, unreviewed</span><span class="sub">medium confidence · heuristic</span></td>
+<td><ul class="evidence"><li><span class="etype">commit</span> <a href="https://github.com/lodibrahim/stillvalid/commit/b16ac95"><code>b16ac95</code></a> <span class="note">Checks passing; no review since opened 2026-10-18 (3 weeks ago)</span></li></ul></td>
+<td><time datetime="2026-10-18T00:33:07+00:00" title="2026-10-18">3 weeks ago</time></td>
+</tr>
 <tr data-verdict="cant_tell">
 <td class="item"><a href="https://github.com/lodibrahim/stillvalid/pull/31">Bump the actions group across 1 directory with 3 updates</a> <span class="num">#31</span></td>
 <td><span class="verdict"><span class="dot v-cant_tell"></span>Can't tell</span></td>
 <td><span class="muted">No evidence</span></td>
-<td><time datetime="2026-10-25T00:33:09+00:00" title="2026-10-25">1 week ago</time></td>
-</tr>
-<tr data-verdict="cant_tell">
-<td class="item"><a href="https://github.com/lodibrahim/stillvalid/pull/26">Bump the cargo group across 1 directory with 4 updates</a> <span class="num">#26</span></td>
-<td><span class="verdict"><span class="dot v-cant_tell"></span>Can't tell</span></td>
-<td><span class="muted">No evidence</span></td>
-<td><time datetime="2026-10-18T00:33:07+00:00" title="2026-10-18">2 weeks ago</time></td>
+<td><time datetime="2026-10-25T00:33:09+00:00" title="2026-10-25">2 weeks ago</time></td>
 </tr>
 </tbody>
 </table>
