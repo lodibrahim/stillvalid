@@ -8,7 +8,7 @@
   "branch": "main",
   "head_sha": "e2062ee8758d847e7d983b9a6a35aebbe15771d2",
   "mode": "basic",
-  "scanned_at": "2026-11-21T12:45:15Z",
+  "scanned_at": "2026-11-22T12:39:59Z",
   "summary": {
     "issues": {
       "open": 2,
@@ -24,8 +24,8 @@
       "superseded": 0,
       "conflicts": 0,
       "abandoned": 0,
-      "ready_unreviewed": 1,
-      "cant_tell": 1
+      "ready_unreviewed": 0,
+      "cant_tell": 2
     }
   },
   "items": [
@@ -45,7 +45,7 @@
           "dist-workspace.toml": "blob:3e954041f583371cff73b6c8e087ce9c1dfdfa46"
         }
       },
-      "checked_at": "2026-11-21T12:45:15Z"
+      "checked_at": "2026-11-22T12:39:59Z"
     },
     {
       "kind": "issue",
@@ -61,50 +61,45 @@
         "body_hash": "sha256:df5c7a06c9cc76a77ad2c88f36fb27b66d9e6fe82c14e496749633a1e6d01520",
         "related_files": {}
       },
-      "checked_at": "2026-11-21T12:45:15Z"
+      "checked_at": "2026-11-22T12:39:59Z"
     },
     {
       "kind": "pull",
-      "number": 31,
-      "title": "Bump the actions group across 1 directory with 3 updates",
-      "url": "https://github.com/lodibrahim/stillvalid/pull/31",
-      "created_at": "2026-10-25T00:33:09Z",
+      "number": 34,
+      "title": "Bump the cargo group across 1 directory with 6 updates",
+      "url": "https://github.com/lodibrahim/stillvalid/pull/34",
+      "created_at": "2026-11-22T00:33:20Z",
       "verdict": "cant_tell",
       "confidence": "low",
       "tier": "none",
       "evidence": [],
       "fingerprint": {
         "related_files": {
-          ".github/workflows/publish-crates.yml": "blob:8cb3910579eb7febfc4989f042cc1b49f324b4ee",
-          ".github/workflows/publish-npm.yml": "blob:9e18d4f32acd225ff100ddc4fbc74f3004d71aab"
+          "Cargo.lock": "blob:a80747f0b533fd49000012a42016619688f1f247"
         },
-        "head_sha": "e27d740cbcb411645ac7e15b6a4deeb74f749919"
+        "head_sha": "80eb6e6a5ddadbb7e4a888b385bfb9801b275579"
       },
-      "checked_at": "2026-11-21T12:45:15Z"
+      "checked_at": "2026-11-22T12:39:59Z"
     },
     {
       "kind": "pull",
-      "number": 26,
-      "title": "Bump the cargo group across 1 directory with 4 updates",
-      "url": "https://github.com/lodibrahim/stillvalid/pull/26",
-      "created_at": "2026-10-18T00:33:07Z",
-      "verdict": "ready_unreviewed",
-      "confidence": "medium",
-      "tier": "heuristic",
-      "evidence": [
-        {
-          "type": "commit",
-          "ref": "b16ac95",
-          "note": "Checks passing; no review since opened 2026-10-18 (4 weeks ago)"
-        }
-      ],
+      "number": 33,
+      "title": "Bump the actions group across 1 directory with 4 updates",
+      "url": "https://github.com/lodibrahim/stillvalid/pull/33",
+      "created_at": "2026-11-22T00:32:52Z",
+      "verdict": "cant_tell",
+      "confidence": "low",
+      "tier": "none",
+      "evidence": [],
       "fingerprint": {
         "related_files": {
-          "Cargo.lock": "blob:a80747f0b533fd49000012a42016619688f1f247"
+          ".github/workflows/ci.yml": "blob:63b5755b37899fd06a5379e15873913157fb540c",
+          ".github/workflows/publish-crates.yml": "blob:8cb3910579eb7febfc4989f042cc1b49f324b4ee",
+          ".github/workflows/publish-npm.yml": "blob:9e18d4f32acd225ff100ddc4fbc74f3004d71aab"
         },
-        "head_sha": "b16ac95e4a5e7239fcbd5606714e7e802026f067"
+        "head_sha": "65a0b3685d7084eea38c9d08d711db5c1ab4d8b3"
       },
-      "checked_at": "2026-11-21T12:45:15Z"
+      "checked_at": "2026-11-22T12:39:59Z"
     }
   ]
 }
