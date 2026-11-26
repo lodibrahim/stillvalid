@@ -8,7 +8,7 @@
   "branch": "main",
   "head_sha": "e2062ee8758d847e7d983b9a6a35aebbe15771d2",
   "mode": "basic",
-  "scanned_at": "2026-11-25T14:31:02Z",
+  "scanned_at": "2026-11-26T13:58:41Z",
   "summary": {
     "issues": {
       "open": 2,
@@ -45,7 +45,7 @@
           "dist-workspace.toml": "blob:3e954041f583371cff73b6c8e087ce9c1dfdfa46"
         }
       },
-      "checked_at": "2026-11-25T14:31:02Z"
+      "checked_at": "2026-11-26T13:58:41Z"
     },
     {
       "kind": "issue",
@@ -61,7 +61,7 @@
         "body_hash": "sha256:df5c7a06c9cc76a77ad2c88f36fb27b66d9e6fe82c14e496749633a1e6d01520",
         "related_files": {}
       },
-      "checked_at": "2026-11-25T14:31:02Z"
+      "checked_at": "2026-11-26T13:58:41Z"
     },
     {
       "kind": "pull",
@@ -79,7 +79,7 @@
         },
         "head_sha": "80eb6e6a5ddadbb7e4a888b385bfb9801b275579"
       },
-      "checked_at": "2026-11-25T14:31:02Z"
+      "checked_at": "2026-11-26T13:58:41Z"
     },
     {
       "kind": "pull",
@@ -99,7 +99,7 @@
         },
         "head_sha": "65a0b3685d7084eea38c9d08d711db5c1ab4d8b3"
       },
-      "checked_at": "2026-11-25T14:31:02Z"
+      "checked_at": "2026-11-26T13:58:41Z"
     }
   ]
 }
